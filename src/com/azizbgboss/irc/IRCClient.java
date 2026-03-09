@@ -278,7 +278,7 @@ public class IRCClient implements CommandListener, Runnable {
                 }
             }
         } catch (Exception e) {
-            if (running) showAlert("Disconnected", "Connection lost.", connectForm);
+            if (running) showAlert("Disconnected", e.getMessage(), connectForm);
         }
         running   = false;
         connected = false;
