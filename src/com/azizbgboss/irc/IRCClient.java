@@ -31,6 +31,9 @@ public class IRCClient implements CommandListener, Runnable {
 
     // --- State ---
     private String  nick;
+    private String  server;
+    private int     port;
+    private boolean forceWifi;
     private String  currentChannel = "";
     private boolean connected      = false;
     private boolean running        = false;
@@ -52,6 +55,9 @@ public class IRCClient implements CommandListener, Runnable {
     private Form       connectForm;
     private TextField  tfNick;
     private TextField  tfChannel;
+    private TextField  tfWifi;
+    private TextField  tfServer;
+    private TextField  tfPort;
     private Command    cmdConnect;
     private Command    cmdQuit;
     private ChatCanvas chatCanvas;
@@ -76,7 +82,7 @@ public class IRCClient implements CommandListener, Runnable {
     private void saveSettings() {
         try {
             RecordStore rs = RecordStore.openRecordStore(RMS_KEY, true);
-            String data    = tfNick.getString() + "|" + tfChannel.getString();
+            String data    = tfNick.getString() + "|" + tfChannel.getString() + "|" + tfWifi.getString() + "|" + tfServer.getString() + "|" + tfPort.getString();
             byte[] bytes   = data.getBytes();
             if (rs.getNumRecords() == 0) {
                 rs.addRecord(bytes, 0, bytes.length);
@@ -93,10 +99,17 @@ public class IRCClient implements CommandListener, Runnable {
             if (rs.getNumRecords() > 0) {
                 byte[] bytes = rs.getRecord(1);
                 String data  = new String(bytes);
-                int sep = data.indexOf('|');
-                if (sep != -1) {
-                    tfNick.setString(data.substring(0, sep));
-                    tfChannel.setString(data.substring(sep + 1));
+                String[] parts = data.split("\\|", -1);
+                if (parts.length == 5) {
+                    tfNick.setString(parts[0]);
+                    tfChannel.setString(parts[1]);
+                    tfWifi.setString(parts[2]);
+                    tfServer.setString(parts[3]);
+                    tfPort.setString(parts[4]);
+                } else {
+                    // Corrupted data, delete it
+                    rs.deleteRecord(1);
+                    showAlert("Error", "Corrupted settings, reset to defaults.", connectForm);
                 }
             }
             rs.closeRecordStore();
@@ -108,12 +121,19 @@ public class IRCClient implements CommandListener, Runnable {
     // -------------------------
 
     private void buildConnectScreen() {
-        connectForm = new Form("BB IRC");
+        connectForm = new Form("BBIRC");
         tfNick      = new TextField("Nickname:", "BBUser",   32, TextField.ANY);
         tfChannel   = new TextField("Channel:",  "#libera",  64, TextField.ANY);
+        tfWifi      = new TextField("Force Wi-Fi (Y/N):", "N", 1, TextField.ANY);
+        tfServer    = new TextField("Server:", HOST, 64, TextField.ANY);
+        tfPort      = new TextField("Port:", String.valueOf(PORT), 5, TextField.NUMERIC);
         connectForm.append(tfNick);
         connectForm.append(tfChannel);
-        connectForm.append(new StringItem("Server:", HOST + ":" + PORT));
+        connectForm.append(tfWifi);
+        connectForm.append(tfServer);
+        connectForm.append(tfPort);
+        connectForm.append(new StringItem("Credits:", "Developed by AzizBgBoss"));
+        connectForm.append(new StringItem("GitHub:", "github.com/AzizBgBoss/BBIRC"));
 
         cmdConnect = new Command("Connect", Command.OK,   1);
         cmdQuit    = new Command("Quit",    Command.EXIT, 2);
@@ -153,6 +173,15 @@ public class IRCClient implements CommandListener, Runnable {
         }
         if (!channel.startsWith("#")) channel = "#" + channel;
 
+        server = tfServer.getString().trim();
+        if (server.length() == 0) server = HOST;
+
+        port = Integer.parseInt(tfPort.getString());
+        if (port == 0) port = PORT;
+
+        String wifi = tfWifi.getString().trim().toUpperCase();
+        forceWifi = wifi.equals("Y");
+
         saveSettings();
 
         final String finalChannel = channel;
@@ -161,7 +190,7 @@ public class IRCClient implements CommandListener, Runnable {
             public void run() {
                 try {
                     socket = (SocketConnection) Connector.open(
-                        "socket://" + HOST + ":" + PORT + ";interface=wifi");
+                        "socket://" + server + ":" + port + (forceWifi ? ";interface=wifi" : ""));
                     in  = socket.openInputStream();
                     out = socket.openOutputStream();
 
@@ -285,10 +314,11 @@ public class IRCClient implements CommandListener, Runnable {
         if (excl != -1) senderNick = prefix.substring(0, excl);
 
         if (command.equals("PRIVMSG")) {
-            int colon = params.indexOf(':');
-            if (colon != -1) {
-                String target  = params.substring(0, colon).trim();
-                String message = params.substring(colon + 1);
+            // params = "#channel :message text"
+            int spaceColon = params.indexOf(" :");
+            if (spaceColon != -1) {
+                String target  = params.substring(0, spaceColon).trim();
+                String message = params.substring(spaceColon + 2); // skip " :"
                 if (target.equals(currentChannel)) {
                     addMessage(senderNick, message, MSG_OTHER);
                 }
@@ -309,6 +339,7 @@ public class IRCClient implements CommandListener, Runnable {
         } else if (command.equals("433")) {
             nick = nick + "_";
             sendRaw("NICK " + nick);
+            sendRaw("USER " + nick + " 0 * :" + nick); // add this line
             addMessage("", "* Nick taken, using: " + nick, MSG_SYSTEM);
         }
     }
@@ -446,7 +477,7 @@ public class IRCClient implements CommandListener, Runnable {
             g.drawLine(0, hintY, W, hintY);
             g.setColor(COLOR_SYSTEM);
             g.setFont(fontSmall);
-            g.drawString("OK=Send  Back=Disconnect", W / 2, hintY + 2,
+            g.drawString("Press Back to disconnect", W / 2, hintY + 2,
                 Graphics.TOP | Graphics.HCENTER);
 
             // --- Chat area ---
@@ -472,7 +503,7 @@ public class IRCClient implements CommandListener, Runnable {
                 // Timestamp
                 g.setFont(fontSmall);
                 g.setColor(COLOR_TIMESTAMP);
-                g.drawString(ts, 2, y, Graphics.TOP | Graphics.LEFT);
+                g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
                 int tsW = fontSmall.stringWidth(ts) + 4;
 
                 if (type == MSG_SYSTEM) {
