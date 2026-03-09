@@ -572,6 +572,39 @@ public class IRCClient implements CommandListener, Runnable {
             return result;
         }
 
+        // Returns true if message i should be grouped with the previous one:
+        // same sender, not system, and within 10 minutes
+        private boolean isGrouped(int i) {
+            if (i == 0) return false;
+            String[] cur  = (String[]) messages.elementAt(i);
+            String[] prev = (String[]) messages.elementAt(i - 1);
+            int curType  = Integer.parseInt(cur[2]);
+            int prevType = Integer.parseInt(prev[2]);
+            if (curType  == MSG_SYSTEM) return false;
+            if (prevType == MSG_SYSTEM) return false;
+            // same nick?
+            if (!cur[0].equals(prev[0])) return false;
+            // within 10 minutes? compare timestamps "HH:MM"
+            String tsCur  = (String) timestamps.elementAt(i);
+            String tsPrev = (String) timestamps.elementAt(i - 1);
+            int minCur  = tsToMinutes(tsCur);
+            int minPrev = tsToMinutes(tsPrev);
+            int diff = minCur - minPrev;
+            if (diff < 0) diff += 1440; // midnight rollover
+            return diff <= 10;
+        }
+
+        private int tsToMinutes(String ts) {
+            // ts format: "HH:MM"
+            try {
+                int h = Integer.parseInt(ts.substring(0, 2));
+                int m = Integer.parseInt(ts.substring(3, 5));
+                return h * 60 + m;
+            } catch (Exception e) {
+                return 0;
+            }
+        }
+
         protected void paint(Graphics g) {
             int W = getWidth();
             int H = getHeight();
@@ -605,30 +638,30 @@ public class IRCClient implements CommandListener, Runnable {
             g.drawString("Press Options to send/leave", W / 2, hintY + 2,
                 Graphics.TOP | Graphics.HCENTER);
 
-            // Chat area
             int chatTop  = titleH + 2;
             int chatBot  = hintY - 2;
             int maxLines = (chatBot - chatTop) / lineH;
 
-            // --- count lines per message (same logic as drawing) ---
-            // msg format: "xx:xx nick:\nmsg line1\nmsg line2..."
-            // each message = 1 line (header: timestamp + nick) + wrapped text lines
             int msgCount = messages.size();
+            if (msgCount == 0) return;
 
-            // count total lines per message into an array
+            // --- count lines per message ---
             int[] msgLines = new int[msgCount];
             synchronized (IRCClient.this) {
                 for (int i = 0; i < msgCount; i++) {
                     String[] msg  = (String[]) messages.elementAt(i);
                     String   text = msg[1];
                     int      type = Integer.parseInt(msg[2]);
+                    boolean  grouped = isGrouped(i);
+
                     if (type == MSG_SYSTEM) {
-                        // 1 header line + wrap lines
-                        msgLines[i] = 1 + wrapText(text, fontSmall, W - 2).length - 1;
-                        // actually system: timestamp on same line as text, so just wrap lines
-                        msgLines[i] = wrapText(text, fontSmall, W - fontSmall.stringWidth("00:00 ") - 2).length;
+                        int tsW = fontSmall.stringWidth("00:00 ");
+                        msgLines[i] = wrapText(text, fontSmall, W - tsW - 2).length;
+                    } else if (grouped) {
+                        // no header line, just text
+                        msgLines[i] = wrapText(text, fontSmall, W - 2).length;
                     } else {
-                        // 1 header line (timestamp + nick) + text wrap lines
+                        // 1 header line + text lines
                         msgLines[i] = 1 + wrapText(text, fontSmall, W - 2).length;
                     }
                 }
@@ -643,7 +676,6 @@ public class IRCClient implements CommandListener, Runnable {
                 start = i;
             }
 
-            // draw from top, push messages to bottom
             int y = chatBot - usedLines * lineH;
 
             synchronized (IRCClient.this) {
@@ -653,11 +685,11 @@ public class IRCClient implements CommandListener, Runnable {
                     String   msgNick = msg[0];
                     String   text    = msg[1];
                     int      type    = Integer.parseInt(msg[2]);
+                    boolean  grouped = isGrouped(i);
 
                     int tsW = fontSmall.stringWidth(ts + " ");
 
                     if (type == MSG_SYSTEM) {
-                        // timestamp + system text on same line, wrapped
                         g.setFont(fontSmall);
                         g.setColor(COLOR_TIMESTAMP);
                         g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
@@ -665,6 +697,15 @@ public class IRCClient implements CommandListener, Runnable {
                         for (int w = 0; w < wrapped.length; w++) {
                             g.setColor(COLOR_SYSTEM);
                             g.drawString(wrapped[w], tsW, y, Graphics.TOP | Graphics.LEFT);
+                            y += lineH;
+                        }
+                    } else if (grouped) {
+                        // same sender within 10 mins — just draw text, no header
+                        String[] wrapped = wrapText(text, fontSmall, W - 2);
+                        for (int w = 0; w < wrapped.length; w++) {
+                            g.setFont(fontSmall);
+                            g.setColor(COLOR_TEXT);
+                            g.drawString(wrapped[w], 2, y, Graphics.TOP | Graphics.LEFT);
                             y += lineH;
                         }
                     } else {
@@ -677,7 +718,7 @@ public class IRCClient implements CommandListener, Runnable {
                         g.drawString(msgNick + ":", tsW, y, Graphics.TOP | Graphics.LEFT);
                         y += lineH;
 
-                        // text lines: no indentation, full width
+                        // text lines
                         String[] wrapped = wrapText(text, fontSmall, W - 2);
                         for (int w = 0; w < wrapped.length; w++) {
                             g.setFont(fontSmall);
