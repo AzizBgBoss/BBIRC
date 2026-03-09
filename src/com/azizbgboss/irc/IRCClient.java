@@ -31,6 +31,7 @@ public class IRCClient implements CommandListener, Runnable {
     // --- State ---
     private String  nick;
     private String  server;
+    private String  nsPassword; // optional NickServ password
     private int     port;
     private boolean forceWifi;
     private String  currentChannel = "";
@@ -59,6 +60,7 @@ public class IRCClient implements CommandListener, Runnable {
     private TextField  tfWifi;
     private TextField  tfServer;
     private TextField  tfPort;
+    private TextField  tfPassword;  // NickServ password
     private Command    cmdConnect;
     private Command    cmdQuit;
     private ChatCanvas chatCanvas;
@@ -86,7 +88,8 @@ public class IRCClient implements CommandListener, Runnable {
                            tfChannel.getString() + "|" +
                            tfWifi.getString() + "|" +
                            tfServer.getString() + "|" +
-                           tfPort.getString();
+                           tfPort.getString() + "|" +
+                           tfPassword.getString();
             byte[] bytes = data.getBytes();
             if (rs.getNumRecords() == 0) {
                 rs.addRecord(bytes, 0, bytes.length);
@@ -103,21 +106,22 @@ public class IRCClient implements CommandListener, Runnable {
             if (rs.getNumRecords() > 0) {
                 byte[]   bytes = rs.getRecord(1);
                 String   data  = new String(bytes);
-                String[] parts = new String[5];
+                String[] parts = new String[6];
                 int count = 0, start = 0;
-                for (int i = 0; i <= data.length() && count < 4; i++) {
+                for (int i = 0; i <= data.length() && count < 5; i++) {
                     if (i == data.length() || data.charAt(i) == '|') {
                         parts[count++] = data.substring(start, i);
                         start = i + 1;
                     }
                 }
-                parts[4] = start < data.length() ? data.substring(start) : "";
+                parts[5] = start < data.length() ? data.substring(start) : "";
 
                 if (parts[0] != null && parts[0].length() > 0) tfNick.setString(parts[0]);
                 if (parts[1] != null && parts[1].length() > 0) tfChannel.setString(parts[1]);
                 if (parts[2] != null && parts[2].length() > 0) tfWifi.setString(parts[2]);
                 if (parts[3] != null && parts[3].length() > 0) tfServer.setString(parts[3]);
                 if (parts[4] != null && parts[4].length() > 0) tfPort.setString(parts[4]);
+                if (parts[5] != null && parts[5].length() > 0) tfPassword.setString(parts[5]);
             }
             rs.closeRecordStore();
         } catch (Exception e) {}
@@ -134,11 +138,13 @@ public class IRCClient implements CommandListener, Runnable {
         tfWifi    = new TextField("Force Wi-Fi (Y/N):", "N", 1, TextField.ANY);
         tfServer  = new TextField("Server:", HOST, 64, TextField.ANY);
         tfPort    = new TextField("Port:", String.valueOf(PORT), 5, TextField.NUMERIC);
+        tfPassword = new TextField("NickServ Password:", "", 64, TextField.PASSWORD);
         connectForm.append(tfNick);
         connectForm.append(tfChannel);
         connectForm.append(tfWifi);
         connectForm.append(tfServer);
         connectForm.append(tfPort);
+        connectForm.append(tfPassword);
         connectForm.append(new StringItem("Credits:", "Developed by AzizBgBoss"));
         connectForm.append(new StringItem("GitHub:", "github.com/AzizBgBoss/BBIRC"));
 
@@ -178,6 +184,7 @@ public class IRCClient implements CommandListener, Runnable {
 
         nick = tfNick.getString().trim();
         String channel = tfChannel.getString().trim();
+        nsPassword = tfPassword.getString().trim();
 
         if (nick.length() == 0) {
             showAlert("Error", "Enter a nickname.", connectForm);
@@ -396,6 +403,10 @@ public class IRCClient implements CommandListener, Runnable {
             if (!registered) {
                 registered = true;
                 addMessage("", "* Connected!", MSG_SYSTEM);
+                if (nsPassword != null && nsPassword.length() > 0) {
+                    sendRaw("PRIVMSG NickServ :IDENTIFY " + nsPassword);
+                    addMessage("", "* Identifying with NickServ", MSG_SYSTEM);
+                }
                 if (pendingChannel != null) {
                     joinChannel(pendingChannel);
                     pendingChannel = null;
@@ -410,7 +421,7 @@ public class IRCClient implements CommandListener, Runnable {
 
     private void notification() {
         try {
-            midlet.getDisplay().vibrate(200);
+            midlet.getDisplay().vibrate(100);
         } catch (Exception e) {}
     }
 
@@ -648,22 +659,21 @@ public class IRCClient implements CommandListener, Runnable {
                             y += lineH;
                         }
                     } else {
+                        // draw nick on its own line
                         g.setFont(fontBold);
                         g.setColor(type == MSG_SELF ? COLOR_NICK_SELF : COLOR_NICK_OTHER);
                         String nickStr = "<" + msgNick + "> ";
                         g.drawString(nickStr, tsW, y, Graphics.TOP | Graphics.LEFT);
-                        int nickW = fontBold.stringWidth(nickStr);
+                        y += lineH;
 
-                        // wrap message text after the nick
-                        int maxTextW = W - tsW - nickW - 2;
+                        // wrap message text beneath nick, aligned with timestamp
+                        int nickW = fontBold.stringWidth(nickStr);
+                        int maxTextW = W - tsW - nickW - 2; // nick width only affects wrap width
                         String[] wrapped = wrapText(text, fontSmall, maxTextW);
                         for (int w = 0; w < wrapped.length; w++) {
-                            if (w > 0) {
-                                // continuation lines indent past timestamp + nick
-                                g.setFont(fontSmall);
-                            }
+                            g.setFont(fontSmall);
                             g.setColor(COLOR_TEXT);
-                            g.drawString(wrapped[w], tsW + nickW, y, Graphics.TOP | Graphics.LEFT);
+                            g.drawString(wrapped[w], tsW, y, Graphics.TOP | Graphics.LEFT);
                             y += lineH;
                         }
                     }
