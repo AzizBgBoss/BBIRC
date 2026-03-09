@@ -204,6 +204,12 @@ public class IRCClient implements CommandListener, Runnable {
 
         saveSettings();
 
+        // show chat canvas right away with a connecting indication
+        buildChatCanvas(channel);
+        chatCanvas.setTitle("Connecting...");
+        addMessage("", "* Connecting...", MSG_SYSTEM);
+        midlet.getDisplay().setCurrent(chatCanvas);
+
         connecting = true;
         final String finalChannel = channel;
 
@@ -287,8 +293,7 @@ public class IRCClient implements CommandListener, Runnable {
         sendRaw("JOIN " + channel);
         midlet.getDisplay().callSerially(new Runnable() {
             public void run() {
-                messages.removeAllElements();
-                timestamps.removeAllElements();
+                // do not clear messages; keep status lines like "Connecting..." and "Connected!"
                 buildChatCanvas(channel);
                 midlet.getDisplay().setCurrent(chatCanvas);
             }
@@ -390,6 +395,7 @@ public class IRCClient implements CommandListener, Runnable {
         } else if (command.equals("001")) {
             if (!registered) {
                 registered = true;
+                addMessage("", "* Connected!", MSG_SYSTEM);
                 if (pendingChannel != null) {
                     joinChannel(pendingChannel);
                     pendingChannel = null;
