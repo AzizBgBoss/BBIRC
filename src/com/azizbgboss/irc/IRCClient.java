@@ -113,7 +113,7 @@ public class IRCClient implements CommandListener, Runnable {
             public void run() {
                 try {
                     socket = (SocketConnection) Connector.open(
-                        "socket://" + HOST + ":" + PORT);
+                        "socket://" + HOST + ":" + PORT + ";interface=wifi");
                     in  = socket.openInputStream();
                     out = socket.openOutputStream();
 
