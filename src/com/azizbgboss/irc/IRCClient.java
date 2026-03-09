@@ -37,6 +37,8 @@ public class IRCClient implements CommandListener, Runnable {
     private String  currentChannel = "";
     private boolean connected      = false;
     private boolean running        = false;
+    private boolean registered     = false;      // true once we get welcome (001)
+    private String  pendingChannel = null;       // channel to join after registration
 
     // --- Messages ---
     private Vector messages    = new Vector(); // String[]{ nick, text, type }
@@ -201,6 +203,8 @@ public class IRCClient implements CommandListener, Runnable {
                     out = socket.openOutputStream();
 
                     connected = true;
+                    registered = false;
+                    pendingChannel = finalChannel;
 
                     sendRaw("NICK " + nick);
                     sendRaw("USER " + nick + " 0 * :" + nick);
@@ -209,8 +213,7 @@ public class IRCClient implements CommandListener, Runnable {
                     readThread = new Thread(IRCClient.this);
                     readThread.start();
 
-                    joinChannel(finalChannel);
-
+                    // don't join yet; wait for registration (001)
                 } catch (Exception e) {
                     showAlert("Error", "Could not connect: " + e.getMessage(), connectForm);
                 }
@@ -219,30 +222,47 @@ public class IRCClient implements CommandListener, Runnable {
     }
 
     public void disconnect() {
-        running   = false;
-        connected = false;
+        running = false;
         try {
-            if (out    != null) sendRaw("QUIT :BB IRC");
-            if (in     != null) in.close();
-            if (out    != null) out.close();
+            // send quit while still marked connected so sendRaw actually writes it
+            if (out != null) sendRaw("QUIT :BB IRC");
+            if (in  != null) in.close();
+            if (out != null) out.close();
             if (socket != null) socket.close();
         } catch (Exception e) {}
+        connected = false;
+        registered = false;
+        pendingChannel = null;
     }
 
     // -------------------------
     // --- Send ---
     // -------------------------
 
-    private void sendRaw(String line) {
+    private boolean sendRaw(String line) {
         try {
+            if (!connected || out == null) return false;
             out.write((line + "\r\n").getBytes());
             out.flush();
-        } catch (Exception e) {}
+            return true;
+        } catch (IOException ioe) {
+            handleIOError(ioe);
+            return false;
+        } catch (Exception e) {
+            // unexpected error, log for debugging
+            // logging unavailable on CLDC devices
+            //System.out.println("sendRaw failed: " + e);
+            return false;
+        }
     }
 
     private void sendMessage(String channel, String message) {
-        sendRaw("PRIVMSG " + channel + " :" + message);
-        addMessage(nick, message, MSG_SELF);
+        boolean ok = sendRaw("PRIVMSG " + channel + " :" + message);
+        if (ok) {
+            addMessage(nick, message, MSG_SELF);
+        } else {
+            addMessage("", "* failed to send message", MSG_SYSTEM);
+        }
     }
 
     private void joinChannel(final String channel) {
@@ -271,14 +291,14 @@ public class IRCClient implements CommandListener, Runnable {
                 char c = (char) b;
                 if (c == '\n') {
                     String line = lineBuf.toString().trim();
-                    lineBuf = new StringBuffer();
+                    lineBuf.setLength(0);
                     if (line.length() > 0) handleLine(line);
                 } else if (c != '\r') {
                     lineBuf.append(c);
                 }
             }
         } catch (Exception e) {
-            if (running) showAlert("Disconnected", e.getMessage(), connectForm);
+            if (running) showAlert("Disconnected", "Connection lost: " + e.getMessage(), connectForm);
         }
         running   = false;
         connected = false;
@@ -298,6 +318,9 @@ public class IRCClient implements CommandListener, Runnable {
         String command = "";
         String params  = "";
         String rest    = line;
+
+        // debug log of every incoming line (removed on device)
+        //System.out.println("<- " + line);
 
         if (rest.startsWith(":")) {
             int sp = rest.indexOf(' ');
@@ -343,10 +366,20 @@ public class IRCClient implements CommandListener, Runnable {
                 addMessage("", "* Users: " + params.substring(colon + 1), MSG_SYSTEM);
             }
         } else if (command.equals("433")) {
+            // nickname in use
             nick = nick + "_";
             sendRaw("NICK " + nick);
-            sendRaw("USER " + nick + " 0 * :" + nick); // add this line
+            if (!registered) {
+                // re-send USER until we're registered with a unique nick
+                sendRaw("USER " + nick + " 0 * :" + nick);
+            }
             addMessage("", "* Nick taken, using: " + nick, MSG_SYSTEM);
+        } else if (command.equals("001") || command.equals("376")) {
+            // welcome or end of MOTD; registration complete
+            if (!registered) {
+                registered = true;
+                attemptJoinPending();
+            }
         }
     }
 
@@ -357,11 +390,29 @@ public class IRCClient implements CommandListener, Runnable {
         } catch (Exception e) {}
     }
 
+    private void attemptJoinPending() {
+        if (pendingChannel != null && registered) {
+            joinChannel(pendingChannel);
+            pendingChannel = null;
+        }
+    }
+
+    private void handleIOError(Exception e) {
+        connected = false;
+        running   = false;
+        try {
+            if (out != null) out.close();
+            if (in  != null) in.close();
+            if (socket != null) socket.close();
+        } catch (Exception ignore) {}
+        showAlert("Error", "Network error: " + e.getMessage(), connectForm);
+    }
+
     // -------------------------
     // --- Messages ---
     // -------------------------
 
-    private void addMessage(final String msgNick, final String text, final int type) {
+    private synchronized void addMessage(final String msgNick, final String text, final int type) {
         // Timestamp HH:MM
         long now     = System.currentTimeMillis();
         int  hours   = (int)((now / 3600000) % 24);
@@ -511,12 +562,13 @@ public class IRCClient implements CommandListener, Runnable {
 
             int y = chatTop + (maxLines - (msgCount - start)) * lineH;
 
-            for (int i = start; i < msgCount; i++) {
-                String[] msg = (String[]) messages.elementAt(i);
-                String   ts  = (String)   timestamps.elementAt(i);
-                String   msgNick = msg[0];
-                String   text    = msg[1];
-                int      type    = Integer.parseInt(msg[2]);
+            synchronized(messages) {
+                for (int i = start; i < msgCount; i++) {
+                    String[] msg = (String[]) messages.elementAt(i);
+                    String   ts  = (String)   timestamps.elementAt(i);
+                    String   msgNick = msg[0];
+                    String   text    = msg[1];
+                    int      type    = Integer.parseInt(msg[2]);
 
                 // Timestamp
                 g.setFont(fontSmall);
@@ -555,4 +607,5 @@ public class IRCClient implements CommandListener, Runnable {
             }
         }
     }
+}
 }
