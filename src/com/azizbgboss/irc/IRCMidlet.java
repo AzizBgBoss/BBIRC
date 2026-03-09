@@ -15,10 +15,7 @@ public class IRCMidlet extends MIDlet {
 
     public void pauseApp() {}
 
-    public void destroyApp(boolean unconditional) {
-        client.disconnect();
-        notifyDestroyed();
-    }
+    public void destroyApp(boolean unconditional) {}
 
     public void quit() {
         client.disconnect();

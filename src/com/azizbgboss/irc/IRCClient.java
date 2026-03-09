@@ -99,18 +99,24 @@ public class IRCClient implements CommandListener, Runnable {
             if (rs.getNumRecords() > 0) {
                 byte[] bytes = rs.getRecord(1);
                 String data  = new String(bytes);
-                String[] parts = data.split("\\|", -1);
-                if (parts.length == 5) {
-                    tfNick.setString(parts[0]);
-                    tfChannel.setString(parts[1]);
-                    tfWifi.setString(parts[2]);
-                    tfServer.setString(parts[3]);
-                    tfPort.setString(parts[4]);
-                } else {
-                    // Corrupted data, delete it
-                    rs.deleteRecord(1);
-                    showAlert("Error", "Corrupted settings, reset to defaults.", connectForm);
+
+                // Manual split by '|' instead of String.split()
+                String[] parts = new String[5];
+                int count = 0;
+                int start = 0;
+                for (int i = 0; i <= data.length() && count < 4; i++) {
+                    if (i == data.length() || data.charAt(i) == '|') {
+                        parts[count++] = data.substring(start, i);
+                        start = i + 1;
+                    }
                 }
+                parts[4] = start < data.length() ? data.substring(start) : "";
+
+                if (parts[0] != null && parts[0].length() > 0) tfNick.setString(parts[0]);
+                if (parts[1] != null && parts[1].length() > 0) tfChannel.setString(parts[1]);
+                if (parts[2] != null && parts[2].length() > 0) tfWifi.setString(parts[2]);
+                if (parts[3] != null && parts[3].length() > 0) tfServer.setString(parts[3]);
+                if (parts[4] != null && parts[4].length() > 0) tfPort.setString(parts[4]);
             }
             rs.closeRecordStore();
         } catch (Exception e) {}
@@ -344,6 +350,13 @@ public class IRCClient implements CommandListener, Runnable {
         }
     }
 
+    private void notification() {
+        try {
+            // Vibrate for 200ms
+            midlet.getDisplay().vibrate(200);
+        } catch (Exception e) {}
+    }
+
     // -------------------------
     // --- Messages ---
     // -------------------------
@@ -359,6 +372,11 @@ public class IRCClient implements CommandListener, Runnable {
             messages.removeElementAt(0);
             timestamps.removeElementAt(0);
         }
+
+        if (type == MSG_OTHER) {
+            notification();
+        }
+
         messages.addElement(new String[]{ msgNick, text, String.valueOf(type) });
         timestamps.addElement(ts);
 
