@@ -610,32 +610,41 @@ public class IRCClient implements CommandListener, Runnable {
             int chatBot  = hintY - 2;
             int maxLines = (chatBot - chatTop) / lineH;
 
+            // --- count lines per message (same logic as drawing) ---
+            // msg format: "xx:xx nick:\nmsg line1\nmsg line2..."
+            // each message = 1 line (header: timestamp + nick) + wrapped text lines
             int msgCount = messages.size();
-            int start    = msgCount;
-            int usedLines = 0;
-            // walk backwards to figure out how many messages (with wraps) fit
-            for (int i = msgCount - 1; i >= 0; i--) {
-                String[] msg     = (String[]) messages.elementAt(i);
-                String   ts      = (String)   timestamps.elementAt(i);
-                String   msgNick = msg[0];
-                String   text    = msg[1];
-                int      type    = Integer.parseInt(msg[2]);
 
-                int tsW = fontSmall.stringWidth(ts + " ");
-                int lines;
-                if (type == MSG_SYSTEM) {
-                    lines = wrapText(text, fontSmall, W - tsW - 2).length;
-                } else {
-                    int nickW = fontBold.stringWidth(msgNick + ": ");
-                    int maxTextW = W - tsW - nickW - 2;
-                    lines = wrapText(text, fontSmall, maxTextW).length;
+            // count total lines per message into an array
+            int[] msgLines = new int[msgCount];
+            synchronized (IRCClient.this) {
+                for (int i = 0; i < msgCount; i++) {
+                    String[] msg  = (String[]) messages.elementAt(i);
+                    String   text = msg[1];
+                    int      type = Integer.parseInt(msg[2]);
+                    if (type == MSG_SYSTEM) {
+                        // 1 header line + wrap lines
+                        msgLines[i] = 1 + wrapText(text, fontSmall, W - 2).length - 1;
+                        // actually system: timestamp on same line as text, so just wrap lines
+                        msgLines[i] = wrapText(text, fontSmall, W - fontSmall.stringWidth("00:00 ") - 2).length;
+                    } else {
+                        // 1 header line (timestamp + nick) + text wrap lines
+                        msgLines[i] = 1 + wrapText(text, fontSmall, W - 2).length;
+                    }
                 }
-                if (usedLines + lines > maxLines) break;
-                usedLines += lines;
+            }
+
+            // walk backwards to find start index
+            int start     = msgCount;
+            int usedLines = 0;
+            for (int i = msgCount - 1; i >= 0; i--) {
+                if (usedLines + msgLines[i] > maxLines) break;
+                usedLines += msgLines[i];
                 start = i;
             }
 
-            int y = chatTop + (maxLines - usedLines) * lineH;
+            // draw from top, push messages to bottom
+            int y = chatBot - usedLines * lineH;
 
             synchronized (IRCClient.this) {
                 for (int i = start; i < msgCount; i++) {
@@ -645,13 +654,13 @@ public class IRCClient implements CommandListener, Runnable {
                     String   text    = msg[1];
                     int      type    = Integer.parseInt(msg[2]);
 
-                    g.setFont(fontSmall);
-                    g.setColor(COLOR_TIMESTAMP);
-                    g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
                     int tsW = fontSmall.stringWidth(ts + " ");
 
                     if (type == MSG_SYSTEM) {
-                        // wrap system messages
+                        // timestamp + system text on same line, wrapped
+                        g.setFont(fontSmall);
+                        g.setColor(COLOR_TIMESTAMP);
+                        g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
                         String[] wrapped = wrapText(text, fontSmall, W - tsW - 2);
                         for (int w = 0; w < wrapped.length; w++) {
                             g.setColor(COLOR_SYSTEM);
@@ -659,21 +668,21 @@ public class IRCClient implements CommandListener, Runnable {
                             y += lineH;
                         }
                     } else {
-                        // draw nick on its own line
+                        // header line: "xx:xx nick:"
+                        g.setFont(fontSmall);
+                        g.setColor(COLOR_TIMESTAMP);
+                        g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
                         g.setFont(fontBold);
                         g.setColor(type == MSG_SELF ? COLOR_NICK_SELF : COLOR_NICK_OTHER);
-                        String nickStr = "<" + msgNick + "> ";
-                        g.drawString(nickStr, tsW, y, Graphics.TOP | Graphics.LEFT);
+                        g.drawString(msgNick + ":", tsW, y, Graphics.TOP | Graphics.LEFT);
                         y += lineH;
 
-                        // wrap message text beneath nick, aligned with timestamp
-                        int nickW = fontBold.stringWidth(nickStr);
-                        int maxTextW = W - tsW - nickW - 2; // nick width only affects wrap width
-                        String[] wrapped = wrapText(text, fontSmall, maxTextW);
+                        // text lines: no indentation, full width
+                        String[] wrapped = wrapText(text, fontSmall, W - 2);
                         for (int w = 0; w < wrapped.length; w++) {
                             g.setFont(fontSmall);
                             g.setColor(COLOR_TEXT);
-                            g.drawString(wrapped[w], tsW, y, Graphics.TOP | Graphics.LEFT);
+                            g.drawString(wrapped[w], 2, y, Graphics.TOP | Graphics.LEFT);
                             y += lineH;
                         }
                     }
