@@ -2,19 +2,44 @@ package com.azizbgboss.irc;
 
 import javax.microedition.lcdui.*;
 import javax.microedition.io.*;
+import javax.microedition.rms.*;
 import java.io.*;
+import java.util.Vector;
 
 public class IRCClient implements CommandListener, Runnable {
 
     // --- Server ---
-    private static final String HOST = "irc.libera.chat";
-    private static final int    PORT = 6667;
+    private static final String HOST    = "irc.libera.chat";
+    private static final int    PORT    = 6667;
+    private static final String RMS_KEY = "ircsettings";
+
+    // --- Colors ---
+    private static final int COLOR_BG        = 0x0F0F0F;
+    private static final int COLOR_TEXT       = 0xE0E0E0;
+    private static final int COLOR_NICK_SELF  = 0x57A0D3; // blue
+    private static final int COLOR_NICK_OTHER = 0x57D387; // green
+    private static final int COLOR_SYSTEM     = 0x888888; // gray
+    private static final int COLOR_INPUT_BG   = 0x1E1E1E;
+    private static final int COLOR_INPUT_TEXT = 0xFFFFFF;
+    private static final int COLOR_DIVIDER    = 0x333333;
+    private static final int COLOR_TIMESTAMP  = 0x555555;
+
+    // --- Message types ---
+    private static final int MSG_SELF   = 0;
+    private static final int MSG_OTHER  = 1;
+    private static final int MSG_SYSTEM = 2;
 
     // --- State ---
-    private String nick;
-    private String currentChannel = "";
-    private boolean connected     = false;
-    private boolean running       = false;
+    private String  nick;
+    private String  currentChannel = "";
+    private boolean connected      = false;
+    private boolean running        = false;
+
+    // --- Messages ---
+    private Vector messages    = new Vector(); // String[]{ nick, text, type }
+    private Vector timestamps  = new Vector(); // String
+
+    private static final int MAX_MESSAGES = 50;
 
     // --- IO ---
     private SocketConnection socket;
@@ -23,38 +48,59 @@ public class IRCClient implements CommandListener, Runnable {
     private Thread readThread;
 
     // --- UI ---
-    private IRCMidlet midlet;
-
-    // Connect screen
-    private Form      connectForm;
-    private TextField tfNick;
-    private Command   cmdConnect;
-    private Command   cmdQuit;
-
-    // Channel list screen
-    private List      channelList;
-    private Command   cmdJoin;
-    private Command   cmdNewChannel;
-    private Command   cmdDisconnect;
-
-    // Chat screen
-    private Form      chatForm;
-    private Command   cmdSend;
-    private Command   cmdLeave;
-    private Command   cmdBack;
-
-    // Input box
-    private TextBox   inputBox;
-    private Command   cmdOk;
-    private Command   cmdCancel;
-
-    // Join input
-    private TextBox   joinBox;
+    private IRCMidlet  midlet;
+    private Form       connectForm;
+    private TextField  tfNick;
+    private TextField  tfChannel;
+    private Command    cmdConnect;
+    private Command    cmdQuit;
+    private ChatCanvas chatCanvas;
+    private TextBox    inputBox;
+    private Command    cmdSend;
+    private Command    cmdBack;
+    private Command    cmdLeave;
+    private Command    cmdInputOk;
+    private Command    cmdInputCancel;
 
     public IRCClient(IRCMidlet midlet) {
         this.midlet = midlet;
         buildConnectScreen();
-        buildChannelList();
+        chatCanvas = new ChatCanvas();
+        loadSettings();
+    }
+
+    // -------------------------
+    // --- RMS ---
+    // -------------------------
+
+    private void saveSettings() {
+        try {
+            RecordStore rs = RecordStore.openRecordStore(RMS_KEY, true);
+            String data    = tfNick.getString() + "|" + tfChannel.getString();
+            byte[] bytes   = data.getBytes();
+            if (rs.getNumRecords() == 0) {
+                rs.addRecord(bytes, 0, bytes.length);
+            } else {
+                rs.setRecord(1, bytes, 0, bytes.length);
+            }
+            rs.closeRecordStore();
+        } catch (Exception e) {}
+    }
+
+    private void loadSettings() {
+        try {
+            RecordStore rs = RecordStore.openRecordStore(RMS_KEY, false);
+            if (rs.getNumRecords() > 0) {
+                byte[] bytes = rs.getRecord(1);
+                String data  = new String(bytes);
+                int sep = data.indexOf('|');
+                if (sep != -1) {
+                    tfNick.setString(data.substring(0, sep));
+                    tfChannel.setString(data.substring(sep + 1));
+                }
+            }
+            rs.closeRecordStore();
+        } catch (Exception e) {}
     }
 
     // -------------------------
@@ -62,9 +108,11 @@ public class IRCClient implements CommandListener, Runnable {
     // -------------------------
 
     private void buildConnectScreen() {
-        connectForm = new Form("IRC - Connect");
-        tfNick = new TextField("Nickname:", "BBUser", 32, TextField.ANY);
+        connectForm = new Form("BB IRC");
+        tfNick      = new TextField("Nickname:", "BBUser",   32, TextField.ANY);
+        tfChannel   = new TextField("Channel:",  "#libera",  64, TextField.ANY);
         connectForm.append(tfNick);
+        connectForm.append(tfChannel);
         connectForm.append(new StringItem("Server:", HOST + ":" + PORT));
 
         cmdConnect = new Command("Connect", Command.OK,   1);
@@ -74,26 +122,17 @@ public class IRCClient implements CommandListener, Runnable {
         connectForm.setCommandListener(this);
     }
 
-    private void buildChannelList() {
-        channelList = new List("Channels", List.IMPLICIT);
+    private void buildChatCanvas(String channel) {
+        chatCanvas = new ChatCanvas();
+        chatCanvas.setTitle(channel);
 
-        cmdNewChannel = new Command("Join",       Command.OK,     1);
-        cmdDisconnect = new Command("Disconnect", Command.EXIT,   2);
-        channelList.addCommand(cmdNewChannel);
-        channelList.addCommand(cmdDisconnect);
-        channelList.setCommandListener(this);
-    }
-
-    private void buildChatScreen(String channel) {
-        chatForm = new Form(channel);
-
-        cmdSend = new Command("Send", Command.OK,     1);
+        cmdSend  = new Command("Send",  Command.OK,     1);
         cmdLeave = new Command("Leave", Command.SCREEN, 2);
         cmdBack  = new Command("Back",  Command.BACK,   3);
-        chatForm.addCommand(cmdSend);
-        chatForm.addCommand(cmdLeave);
-        chatForm.addCommand(cmdBack);
-        chatForm.setCommandListener(this);
+        chatCanvas.addCommand(cmdSend);
+        chatCanvas.addCommand(cmdLeave);
+        chatCanvas.addCommand(cmdBack);
+        chatCanvas.setCommandListener(this);
     }
 
     // -------------------------
@@ -102,12 +141,21 @@ public class IRCClient implements CommandListener, Runnable {
 
     private void connect() {
         nick = tfNick.getString().trim();
+        String channel = tfChannel.getString().trim();
+
         if (nick.length() == 0) {
             showAlert("Error", "Enter a nickname.", connectForm);
             return;
         }
+        if (channel.length() == 0) {
+            showAlert("Error", "Enter a channel.", connectForm);
+            return;
+        }
+        if (!channel.startsWith("#")) channel = "#" + channel;
 
-        showAlert("Connecting", "Connecting to " + HOST + "...", null);
+        saveSettings();
+
+        final String finalChannel = channel;
 
         new Thread(new Runnable() {
             public void run() {
@@ -119,17 +167,14 @@ public class IRCClient implements CommandListener, Runnable {
 
                     connected = true;
 
-                    // Register with server
                     sendRaw("NICK " + nick);
                     sendRaw("USER " + nick + " 0 * :" + nick);
 
-                    // Start reading
                     running = true;
                     readThread = new Thread(IRCClient.this);
                     readThread.start();
 
-                    // Go to channel list
-                    midlet.getDisplay().setCurrent(channelList);
+                    joinChannel(finalChannel);
 
                 } catch (Exception e) {
                     showAlert("Error", "Could not connect: " + e.getMessage(), connectForm);
@@ -139,12 +184,12 @@ public class IRCClient implements CommandListener, Runnable {
     }
 
     public void disconnect() {
-        running = false;
+        running   = false;
         connected = false;
         try {
-            if (out != null) sendRaw("QUIT :BB IRC");
-            if (in  != null) in.close();
-            if (out != null) out.close();
+            if (out    != null) sendRaw("QUIT :BB IRC");
+            if (in     != null) in.close();
+            if (out    != null) out.close();
             if (socket != null) socket.close();
         } catch (Exception e) {}
     }
@@ -162,37 +207,20 @@ public class IRCClient implements CommandListener, Runnable {
 
     private void sendMessage(String channel, String message) {
         sendRaw("PRIVMSG " + channel + " :" + message);
-        appendChat("<" + nick + "> " + message);
+        addMessage(nick, message, MSG_SELF);
     }
 
-    private void joinChannel(String channel) {
-        if (!channel.startsWith("#")) channel = "#" + channel;
+    private void joinChannel(final String channel) {
         currentChannel = channel;
         sendRaw("JOIN " + channel);
-        buildChatScreen(channel);
-
-        // Add to list if not already there
-        boolean found = false;
-        for (int i = 0; i < channelList.size(); i++) {
-            if (channelList.getString(i).equals(channel)) {
-                found = true;
-                break;
+        midlet.getDisplay().callSerially(new Runnable() {
+            public void run() {
+                messages.removeAllElements();
+                timestamps.removeAllElements();
+                buildChatCanvas(channel);
+                midlet.getDisplay().setCurrent(chatCanvas);
             }
-        }
-        if (!found) channelList.append(channel, null);
-
-        midlet.getDisplay().setCurrent(chatForm);
-    }
-
-    private void leaveChannel(String channel) {
-        sendRaw("PART " + channel + " :leaving");
-        for (int i = 0; i < channelList.size(); i++) {
-            if (channelList.getString(i).equals(channel)) {
-                channelList.delete(i);
-                break;
-            }
-        }
-        midlet.getDisplay().setCurrent(channelList);
+        });
     }
 
     // -------------------------
@@ -217,7 +245,7 @@ public class IRCClient implements CommandListener, Runnable {
         } catch (Exception e) {
             if (running) showAlert("Disconnected", "Connection lost.", connectForm);
         }
-        running = false;
+        running   = false;
         connected = false;
     }
 
@@ -226,19 +254,16 @@ public class IRCClient implements CommandListener, Runnable {
     // -------------------------
 
     private void handleLine(final String line) {
-        // PING -> PONG (keep alive)
         if (line.startsWith("PING")) {
-            String token = line.substring(5);
-            sendRaw("PONG " + token);
+            sendRaw("PONG " + line.substring(5));
             return;
         }
 
-        // Parse: :prefix COMMAND params
         String prefix  = "";
         String command = "";
         String params  = "";
+        String rest    = line;
 
-        String rest = line;
         if (rest.startsWith(":")) {
             int sp = rest.indexOf(' ');
             if (sp != -1) {
@@ -255,60 +280,66 @@ public class IRCClient implements CommandListener, Runnable {
             command = rest;
         }
 
-        // Sender nick from prefix (nick!user@host)
         String senderNick = prefix;
         int excl = prefix.indexOf('!');
         if (excl != -1) senderNick = prefix.substring(0, excl);
 
         if (command.equals("PRIVMSG")) {
-            // :nick!u@h PRIVMSG #channel :message
             int colon = params.indexOf(':');
             if (colon != -1) {
                 String target  = params.substring(0, colon).trim();
                 String message = params.substring(colon + 1);
                 if (target.equals(currentChannel)) {
-                    appendChat("<" + senderNick + "> " + message);
+                    addMessage(senderNick, message, MSG_OTHER);
                 }
             }
         } else if (command.equals("JOIN")) {
-            String channel = params.startsWith(":") ? params.substring(1) : params;
             if (!senderNick.equals(nick)) {
-                appendChat("* " + senderNick + " joined " + channel);
+                addMessage("", "* " + senderNick + " joined", MSG_SYSTEM);
             }
-        } else if (command.equals("PART") || command.equals("QUIT")) {
-            appendChat("* " + senderNick + " left");
+        } else if (command.equals("PART")) {
+            addMessage("", "* " + senderNick + " left", MSG_SYSTEM);
+        } else if (command.equals("QUIT")) {
+            addMessage("", "* " + senderNick + " quit", MSG_SYSTEM);
         } else if (command.equals("353")) {
-            // Names list on join
             int colon = params.lastIndexOf(':');
             if (colon != -1) {
-                appendChat("* Users: " + params.substring(colon + 1));
+                addMessage("", "* Users: " + params.substring(colon + 1), MSG_SYSTEM);
             }
-        } else if (command.equals("372") || command.equals("375") || command.equals("376")) {
-            // MOTD — ignore
         } else if (command.equals("433")) {
-            // Nick already in use
             nick = nick + "_";
             sendRaw("NICK " + nick);
-            appendChat("* Nick taken, trying: " + nick);
+            addMessage("", "* Nick taken, using: " + nick, MSG_SYSTEM);
         }
     }
 
     // -------------------------
-    // --- Chat UI ---
+    // --- Messages ---
     // -------------------------
 
-    private void appendChat(final String line) {
+    private void addMessage(final String msgNick, final String text, final int type) {
+        // Timestamp HH:MM
+        long now     = System.currentTimeMillis();
+        int  hours   = (int)((now / 3600000) % 24);
+        int  minutes = (int)((now / 60000)   % 60);
+        String ts    = pad(hours) + ":" + pad(minutes);
+
+        if (messages.size() >= MAX_MESSAGES) {
+            messages.removeElementAt(0);
+            timestamps.removeElementAt(0);
+        }
+        messages.addElement(new String[]{ msgNick, text, String.valueOf(type) });
+        timestamps.addElement(ts);
+
         midlet.getDisplay().callSerially(new Runnable() {
             public void run() {
-                if (chatForm != null) {
-                    // Keep chat to last 20 lines to save memory
-                    while (chatForm.size() >= 20) {
-                        chatForm.delete(0);
-                    }
-                    chatForm.append(new StringItem(null, line + "\n"));
-                }
+                if (chatCanvas != null) chatCanvas.repaint();
             }
         });
+    }
+
+    private String pad(int n) {
+        return n < 10 ? "0" + n : String.valueOf(n);
     }
 
     // -------------------------
@@ -317,7 +348,6 @@ public class IRCClient implements CommandListener, Runnable {
 
     public void commandAction(Command c, Displayable d) {
 
-        // Connect screen
         if (d == connectForm) {
             if (c == cmdConnect) {
                 connect();
@@ -326,65 +356,37 @@ public class IRCClient implements CommandListener, Runnable {
             }
         }
 
-        // Channel list
-        else if (d == channelList) {
-            if (c == cmdNewChannel || c == List.SELECT_COMMAND) {
-                if (c == List.SELECT_COMMAND && channelList.size() > 0) {
-                    // Open existing channel
-                    String ch = channelList.getString(channelList.getSelectedIndex());
-                    currentChannel = ch;
-                    buildChatScreen(ch);
-                    midlet.getDisplay().setCurrent(chatForm);
-                } else {
-                    // Join new channel
-                    joinBox = new TextBox("Channel name", "#", 64, TextField.ANY);
-                    Command ok     = new Command("Join",   Command.OK,   1);
-                    Command cancel = new Command("Cancel", Command.BACK, 2);
-                    joinBox.addCommand(ok);
-                    joinBox.addCommand(cancel);
-                    joinBox.setCommandListener(this);
-                    midlet.getDisplay().setCurrent(joinBox);
-                }
-            } else if (c == cmdDisconnect) {
+        else if (d == chatCanvas) {
+            if (c == cmdSend) {
+                // Open input box
+                inputBox    = new TextBox("Message", "", 256, TextField.ANY);
+                cmdInputOk  = new Command("Send",   Command.OK,   1);
+                cmdInputCancel = new Command("Cancel", Command.BACK, 2);
+                inputBox.addCommand(cmdInputOk);
+                inputBox.addCommand(cmdInputCancel);
+                inputBox.setCommandListener(this);
+                midlet.getDisplay().setCurrent(inputBox);
+            } else if (c == cmdLeave) {
+                sendRaw("PART " + currentChannel + " :leaving");
+                currentChannel = "";
+                disconnect();
+                midlet.getDisplay().setCurrent(connectForm);
+            } else if (c == cmdBack) {
+                // Back goes straight to connect screen
                 disconnect();
                 midlet.getDisplay().setCurrent(connectForm);
             }
         }
 
-        // Join input
-        else if (d == joinBox) {
-            if (c.getCommandType() == Command.OK) {
-                joinChannel(joinBox.getString().trim());
-            } else {
-                midlet.getDisplay().setCurrent(channelList);
-            }
-        }
-
-        // Chat screen
-        else if (d == chatForm) {
-            if (c == cmdSend) {
-                inputBox = new TextBox("Message", "", 256, TextField.ANY);
-                cmdOk     = new Command("Send",   Command.OK,   1);
-                cmdCancel = new Command("Cancel", Command.BACK, 2);
-                inputBox.addCommand(cmdOk);
-                inputBox.addCommand(cmdCancel);
-                inputBox.setCommandListener(this);
-                midlet.getDisplay().setCurrent(inputBox);
-            } else if (c == cmdLeave) {
-                leaveChannel(currentChannel);
-            } else if (c == cmdBack) {
-                midlet.getDisplay().setCurrent(channelList);
-            }
-        }
-
-        // Message input
         else if (d == inputBox) {
             if (c.getCommandType() == Command.OK) {
                 String msg = inputBox.getString().trim();
-                if (msg.length() > 0) sendMessage(currentChannel, msg);
-                midlet.getDisplay().setCurrent(chatForm);
+                if (msg.length() > 0) {
+                    sendMessage(currentChannel, msg);
+                }
+                midlet.getDisplay().setCurrent(chatCanvas);
             } else {
-                midlet.getDisplay().setCurrent(chatForm);
+                midlet.getDisplay().setCurrent(chatCanvas);
             }
         }
     }
@@ -401,5 +403,107 @@ public class IRCClient implements CommandListener, Runnable {
 
     public Displayable getConnectScreen() {
         return connectForm;
+    }
+
+    // -------------------------
+    // --- Chat Canvas ---
+    // -------------------------
+
+    private class ChatCanvas extends Canvas {
+
+        private String title = "";
+
+        public void setTitle(String t) { this.title = t; }
+
+        protected void paint(Graphics g) {
+            int W = getWidth();
+            int H = getHeight();
+
+            // Background
+            g.setColor(COLOR_BG);
+            g.fillRect(0, 0, W, H);
+
+            Font fontSmall  = Font.getFont(Font.FACE_MONOSPACE, Font.STYLE_PLAIN, Font.SIZE_SMALL);
+            Font fontBold   = Font.getFont(Font.FACE_MONOSPACE, Font.STYLE_BOLD,  Font.SIZE_SMALL);
+            int lineH       = fontSmall.getHeight() + 2;
+
+            // --- Title bar ---
+            int titleH = fontBold.getHeight() + 6;
+            g.setColor(0x1A1A2E);
+            g.fillRect(0, 0, W, titleH);
+            g.setColor(COLOR_NICK_SELF);
+            g.setFont(fontBold);
+            g.drawString(title, W / 2, 3, Graphics.TOP | Graphics.HCENTER);
+            g.setColor(COLOR_DIVIDER);
+            g.drawLine(0, titleH, W, titleH);
+
+            // --- Bottom hint bar ---
+            int hintH = fontSmall.getHeight() + 4;
+            int hintY = H - hintH;
+            g.setColor(COLOR_INPUT_BG);
+            g.fillRect(0, hintY, W, hintH);
+            g.setColor(COLOR_DIVIDER);
+            g.drawLine(0, hintY, W, hintY);
+            g.setColor(COLOR_SYSTEM);
+            g.setFont(fontSmall);
+            g.drawString("OK=Send  Back=Disconnect", W / 2, hintY + 2,
+                Graphics.TOP | Graphics.HCENTER);
+
+            // --- Chat area ---
+            int chatTop = titleH + 2;
+            int chatBot = hintY - 2;
+            int chatH   = chatBot - chatTop;
+            int maxLines = chatH / lineH;
+
+            // Draw from bottom up
+            int msgCount = messages.size();
+            int start    = msgCount - maxLines;
+            if (start < 0) start = 0;
+
+            int y = chatTop + (maxLines - (msgCount - start)) * lineH;
+
+            for (int i = start; i < msgCount; i++) {
+                String[] msg = (String[]) messages.elementAt(i);
+                String   ts  = (String)   timestamps.elementAt(i);
+                String   msgNick = msg[0];
+                String   text    = msg[1];
+                int      type    = Integer.parseInt(msg[2]);
+
+                // Timestamp
+                g.setFont(fontSmall);
+                g.setColor(COLOR_TIMESTAMP);
+                g.drawString(ts, 2, y, Graphics.TOP | Graphics.LEFT);
+                int tsW = fontSmall.stringWidth(ts) + 4;
+
+                if (type == MSG_SYSTEM) {
+                    g.setColor(COLOR_SYSTEM);
+                    g.setFont(fontSmall);
+                    g.drawString(text, tsW, y, Graphics.TOP | Graphics.LEFT);
+                } else {
+                    // Nick
+                    g.setFont(fontBold);
+                    g.setColor(type == MSG_SELF ? COLOR_NICK_SELF : COLOR_NICK_OTHER);
+                    String nickStr = "<" + msgNick + "> ";
+                    g.drawString(nickStr, tsW, y, Graphics.TOP | Graphics.LEFT);
+                    int nickW = fontBold.stringWidth(nickStr);
+
+                    // Message text — wrap if needed
+                    g.setFont(fontSmall);
+                    g.setColor(COLOR_TEXT);
+                    int maxTextW = W - tsW - nickW - 2;
+                    if (fontSmall.stringWidth(text) <= maxTextW) {
+                        g.drawString(text, tsW + nickW, y, Graphics.TOP | Graphics.LEFT);
+                    } else {
+                        // Truncate with ellipsis — full wrapping needs more lines
+                        while (text.length() > 0 &&
+                               fontSmall.stringWidth(text + "..") > maxTextW) {
+                            text = text.substring(0, text.length() - 1);
+                        }
+                        g.drawString(text + "..", tsW + nickW, y, Graphics.TOP | Graphics.LEFT);
+                    }
+                }
+                y += lineH;
+            }
+        }
     }
 }
