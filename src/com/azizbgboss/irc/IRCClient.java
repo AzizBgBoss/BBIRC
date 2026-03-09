@@ -457,7 +457,10 @@ public class IRCClient implements CommandListener, Runnable {
 
         midlet.getDisplay().callSerially(new Runnable() {
             public void run() {
-                if (chatCanvas != null) chatCanvas.repaint();
+                if (chatCanvas != null) {
+                    chatCanvas.resetScroll();
+                    chatCanvas.repaint();
+                }
             }
         });
     }
@@ -543,6 +546,22 @@ public class IRCClient implements CommandListener, Runnable {
     private class ChatCanvas extends Canvas {
 
         private String title = "";
+        private int scrollOffset = 0; // lines scrolled up from bottom
+
+        protected void keyPressed(int keyCode) {
+            int action = getGameAction(keyCode);
+            if (action == UP) {
+                scrollOffset++;
+                repaint();
+            } else if (action == DOWN) {
+                if (scrollOffset > 0) scrollOffset--;
+                repaint();
+            }
+        }
+
+        public void resetScroll() {
+            scrollOffset = 0;
+        }
 
         public void setTitle(String t) { this.title = t; }
 
@@ -667,16 +686,33 @@ public class IRCClient implements CommandListener, Runnable {
                 }
             }
 
-            // walk backwards to find start index
-            int start     = msgCount;
-            int usedLines = 0;
-            for (int i = msgCount - 1; i >= 0; i--) {
-                if (usedLines + msgLines[i] > maxLines) break;
-                usedLines += msgLines[i];
-                start = i;
-            }
+            // total lines across all messages
+            int totalLines = 0;
+            for (int i = 0; i < msgCount; i++) totalLines += msgLines[i];
 
-            int y = chatBot - usedLines * lineH;
+            // clamp scroll to valid range
+            int maxScroll = totalLines - maxLines;
+            if (maxScroll < 0) maxScroll = 0;
+            if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+            if (scrollOffset < 0) scrollOffset = 0;
+
+            // find which message to start drawing from,
+            // skipping (totalLines - maxLines - scrollOffset) lines from the top
+            int skipLines = totalLines - maxLines - scrollOffset;
+            if (skipLines < 0) skipLines = 0;
+
+            int start = 0;
+            int skipped = 0;
+            while (start < msgCount && skipped + msgLines[start] <= skipLines) {
+                skipped += msgLines[start];
+                start++;
+            }
+            int partialSkip = skipLines - skipped;
+
+            int y = chatTop - partialSkip * lineH;
+
+            // clip drawing to chat area only — prevents overlap with title/hint bars
+            g.setClip(0, chatTop, W, chatBot - chatTop);
 
             synchronized (IRCClient.this) {
                 for (int i = start; i < msgCount; i++) {
