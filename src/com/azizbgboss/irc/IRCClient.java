@@ -529,6 +529,32 @@ public class IRCClient implements CommandListener, Runnable {
 
         public void setTitle(String t) { this.title = t; }
 
+        private String[] wrapText(String text, Font font, int maxWidth) {
+            Vector lines = new Vector();
+            while (text.length() > 0) {
+                if (font.stringWidth(text) <= maxWidth) {
+                    lines.addElement(text);
+                    break;
+                }
+                // find last space that fits
+                int cut = text.length() - 1;
+                while (cut > 0 && font.stringWidth(text.substring(0, cut)) > maxWidth) {
+                    cut--;
+                }
+                // if no space found, hard break at cut
+                int space = text.lastIndexOf(' ', cut);
+                if (space > 0) cut = space;
+                lines.addElement(text.substring(0, cut));
+                text = text.substring(cut).trim();
+            }
+            if (lines.isEmpty()) lines.addElement("");
+            String[] result = new String[lines.size()];
+            for (int i = 0; i < lines.size(); i++) {
+                result[i] = (String) lines.elementAt(i);
+            }
+            return result;
+        }
+
         protected void paint(Graphics g) {
             int W = getWidth();
             int H = getHeight();
@@ -559,7 +585,7 @@ public class IRCClient implements CommandListener, Runnable {
             g.drawLine(0, hintY, W, hintY);
             g.setColor(COLOR_SYSTEM);
             g.setFont(fontSmall);
-            g.drawString("OK=Send  Menu=Leave", W / 2, hintY + 2,
+            g.drawString("Press Options to send/leave", W / 2, hintY + 2,
                 Graphics.TOP | Graphics.HCENTER);
 
             // Chat area
@@ -568,10 +594,31 @@ public class IRCClient implements CommandListener, Runnable {
             int maxLines = (chatBot - chatTop) / lineH;
 
             int msgCount = messages.size();
-            int start    = msgCount - maxLines;
-            if (start < 0) start = 0;
+            int start    = msgCount;
+            int usedLines = 0;
+            // walk backwards to figure out how many messages (with wraps) fit
+            for (int i = msgCount - 1; i >= 0; i--) {
+                String[] msg     = (String[]) messages.elementAt(i);
+                String   ts      = (String)   timestamps.elementAt(i);
+                String   msgNick = msg[0];
+                String   text    = msg[1];
+                int      type    = Integer.parseInt(msg[2]);
 
-            int y = chatTop + (maxLines - (msgCount - start)) * lineH;
+                int tsW = fontSmall.stringWidth(ts + " ");
+                int lines;
+                if (type == MSG_SYSTEM) {
+                    lines = wrapText(text, fontSmall, W - tsW - 2).length;
+                } else {
+                    int nickW = fontBold.stringWidth(msgNick + ": ");
+                    int maxTextW = W - tsW - nickW - 2;
+                    lines = wrapText(text, fontSmall, maxTextW).length;
+                }
+                if (usedLines + lines > maxLines) break;
+                usedLines += lines;
+                start = i;
+            }
+
+            int y = chatTop + (maxLines - usedLines) * lineH;
 
             synchronized (IRCClient.this) {
                 for (int i = start; i < msgCount; i++) {
@@ -584,11 +631,16 @@ public class IRCClient implements CommandListener, Runnable {
                     g.setFont(fontSmall);
                     g.setColor(COLOR_TIMESTAMP);
                     g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
-                    int tsW = fontSmall.stringWidth(ts) + 4;
+                    int tsW = fontSmall.stringWidth(ts + " ");
 
                     if (type == MSG_SYSTEM) {
-                        g.setColor(COLOR_SYSTEM);
-                        g.drawString(text, tsW, y, Graphics.TOP | Graphics.LEFT);
+                        // wrap system messages
+                        String[] wrapped = wrapText(text, fontSmall, W - tsW - 2);
+                        for (int w = 0; w < wrapped.length; w++) {
+                            g.setColor(COLOR_SYSTEM);
+                            g.drawString(wrapped[w], tsW, y, Graphics.TOP | Graphics.LEFT);
+                            y += lineH;
+                        }
                     } else {
                         g.setFont(fontBold);
                         g.setColor(type == MSG_SELF ? COLOR_NICK_SELF : COLOR_NICK_OTHER);
@@ -596,20 +648,19 @@ public class IRCClient implements CommandListener, Runnable {
                         g.drawString(nickStr, tsW, y, Graphics.TOP | Graphics.LEFT);
                         int nickW = fontBold.stringWidth(nickStr);
 
-                        g.setFont(fontSmall);
-                        g.setColor(COLOR_TEXT);
+                        // wrap message text after the nick
                         int maxTextW = W - tsW - nickW - 2;
-                        if (fontSmall.stringWidth(text) <= maxTextW) {
-                            g.drawString(text, tsW + nickW, y, Graphics.TOP | Graphics.LEFT);
-                        } else {
-                            while (text.length() > 0 &&
-                                   fontSmall.stringWidth(text + "..") > maxTextW) {
-                                text = text.substring(0, text.length() - 1);
+                        String[] wrapped = wrapText(text, fontSmall, maxTextW);
+                        for (int w = 0; w < wrapped.length; w++) {
+                            if (w > 0) {
+                                // continuation lines indent past timestamp + nick
+                                g.setFont(fontSmall);
                             }
-                            g.drawString(text + "..", tsW + nickW, y, Graphics.TOP | Graphics.LEFT);
+                            g.setColor(COLOR_TEXT);
+                            g.drawString(wrapped[w], tsW + nickW, y, Graphics.TOP | Graphics.LEFT);
+                            y += lineH;
                         }
                     }
-                    y += lineH;
                 }
             }
         }
