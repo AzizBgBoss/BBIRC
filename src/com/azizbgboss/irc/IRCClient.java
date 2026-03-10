@@ -912,7 +912,18 @@ public class IRCClient implements CommandListener, Runnable {
                     } else if (grouped) {
                         cachedMsgLines[i] = wrapText(text, fontSmall, W - 2).length;
                     } else {
-                        cachedMsgLines[i] = 1 + wrapText(text, fontSmall, W - 2).length;
+                        String nickPrefix = msg[0] + ": ";
+                        int nickW = fontSmall.stringWidth(nickPrefix); // approx, bold slightly wider but close enough
+                        int tsW2  = fontSmall.stringWidth("00:00 ");
+                        int firstLineW = W - tsW2 - nickW - 2;
+                        if (firstLineW < 20) firstLineW = 20;
+                        String[] firstWrapped = wrapText(text, fontSmall, firstLineW);
+                        String firstLine = firstWrapped[0];
+                        String remainder = text.length() > firstLine.length()
+                            ? text.substring(firstLine.length()).trim() : "";
+                        int contLines = remainder.length() > 0
+                            ? wrapText(remainder, fontSmall, W - 2).length : 0;
+                        cachedMsgLines[i] = 1 + contLines;
                     }
                 }
             }
@@ -1065,22 +1076,41 @@ public class IRCClient implements CommandListener, Runnable {
                             y += lineH;
                         }
                     } else {
+                        // measure nick prefix to know remaining width for first line
+                        int nickColor = type == MSG_SELF
+                            ? COLOR_NICK_SELF
+                            : (Math.abs(msgNick.hashCode()) % 0xAAAAAA + 0x555555);
+                        String nickPrefix = msgNick + ": ";
+                        int nickW = fontBold.stringWidth(nickPrefix);
+                        int firstLineW = W - tsW - nickW - 2;
+                        if (firstLineW < 20) firstLineW = 20; // safety
+
+                        // wrap: first line gets less room, continuation lines get full width
+                        String[] firstWrapped = wrapText(text, fontSmall, firstLineW);
+                        String firstLine = firstWrapped[0];
+                        // remaining text after first line
+                        String remainder = text.length() > firstLine.length()
+                            ? text.substring(firstLine.length()).trim() : "";
+                        String[] contWrapped = remainder.length() > 0
+                            ? wrapText(remainder, fontSmall, W - 2) : new String[0];
+
+                        // draw: timestamp + nick + first line of text all on same y
                         g.setFont(fontSmall);
                         g.setColor(COLOR_TIMESTAMP);
                         g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
                         g.setFont(fontBold);
-                        int nickColor = type == MSG_SELF
-                            ? COLOR_NICK_SELF
-                            : (Math.abs(msgNick.hashCode()) % 0xAAAAAA + 0x555555);
                         g.setColor(nickColor);
-                        g.drawString(msgNick + ":", tsW, y, Graphics.TOP | Graphics.LEFT);
+                        g.drawString(nickPrefix, tsW, y, Graphics.TOP | Graphics.LEFT);
+                        g.setFont(fontSmall);
+                        g.setColor(COLOR_TEXT);
+                        g.drawString(firstLine, tsW + nickW, y, Graphics.TOP | Graphics.LEFT);
                         y += lineH;
 
-                        String[] wrapped = wrapText(text, fontSmall, W - 2);
-                        for (int w = 0; w < wrapped.length; w++) {
+                        // continuation lines flush left
+                        for (int w = 0; w < contWrapped.length; w++) {
                             g.setFont(fontSmall);
                             g.setColor(COLOR_TEXT);
-                            g.drawString(wrapped[w], 2, y, Graphics.TOP | Graphics.LEFT);
+                            g.drawString(contWrapped[w], 2, y, Graphics.TOP | Graphics.LEFT);
                             y += lineH;
                         }
                     }
