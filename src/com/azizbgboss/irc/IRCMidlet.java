@@ -11,7 +11,7 @@ public class IRCMidlet extends MIDlet {
         display = Display.getDisplay(this);
         if (client == null) {
             client = new IRCClient(this);
-            display.setCurrent(client.getConnectScreen());
+            display.setCurrent(client.getMainScreen());
         } else {
             // Resumed from background — go back to chat if connected
             client.resume();

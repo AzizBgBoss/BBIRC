@@ -8,10 +8,14 @@ import java.util.Vector;
 
 public class IRCClient implements CommandListener, Runnable {
 
-    // --- Server ---
-    private static final String HOST    = "irc.libera.chat";
-    private static final int    PORT    = 6667;
-    private static final String RMS_KEY = "ircsettings";
+    // --- Server defaults ---
+    private static final String DEFAULT_HOST = "irc.libera.chat";
+    private static final int    DEFAULT_PORT = 6667;
+
+    // --- RMS keys ---
+    private static final String RMS_PROFILES     = "ircprofiles";
+    private static final String RMS_ACTIVE       = "ircactive";
+    private static final int    MAX_PROFILES     = 5;
 
     // --- Colors ---
     private static final int COLOR_BG        = 0x0F0F0F;
@@ -28,18 +32,18 @@ public class IRCClient implements CommandListener, Runnable {
     private static final int MSG_OTHER  = 1;
     private static final int MSG_SYSTEM = 2;
 
-    // --- State ---
-    private String  nick;
-    private String  altNick;
-    private String  server;
-    private String  nsPassword; // optional NickServ password
-    private int     port;
-    private boolean forceWifi;
+    // --- Connection state ---
+    private String  nick          = "";
+    private String  altNick       = "";
+    private String  server        = DEFAULT_HOST;
+    private String  nsPassword    = "";
+    private int     port          = DEFAULT_PORT;
+    private boolean forceWifi     = false;
     private String  currentChannel = "";
-    private boolean connected      = false;
-    private boolean running        = false;
-    private boolean registered     = false;
-    private boolean connecting     = false;  // guard against double connect
+    private boolean connected     = false;
+    private boolean running       = false;
+    private boolean registered    = false;
+    private boolean connecting    = false;
     private String  pendingChannel = null;
 
     // --- Messages ---
@@ -54,18 +58,52 @@ public class IRCClient implements CommandListener, Runnable {
     private OutputStream out;
     private Thread readThread;
 
-    // --- UI ---
-    private IRCMidlet  midlet;
-    private Form       connectForm;
-    private TextField  tfNick;
-    private TextField  tfAltNick;
-    private TextField  tfChannel;
-    private TextField  tfWifi;
-    private TextField  tfServer;
-    private TextField  tfPort;
-    private TextField  tfPassword;  // NickServ password
-    private Command    cmdConnect;
-    private Command    cmdQuit;
+    // --- Profiles (in-memory) ---
+    // Each element is a String[8]:
+    //   [0] profileName
+    //   [1] nick
+    //   [2] altNick
+    //   [3] channel
+    //   [4] wifi (Y/N)
+    //   [5] server
+    //   [6] port
+    //   [7] password
+    private Vector profiles      = new Vector(); // Vector of String[]
+    private int    activeProfile = 0;            // index into profiles
+
+    // --- UI: MIDlet ---
+    private IRCMidlet midlet;
+
+    // --- UI: Main menu ---
+    private Form    mainForm;
+    private StringItem siProfileName;
+    private Command cmdMainConnect;
+    private Command cmdMainProfiles;
+    private Command cmdMainQuit;
+
+    // --- UI: Profile list ---
+    private List    profileList;
+    private Command cmdPlNew;
+    private Command cmdPlEdit;
+    private Command cmdPlDelete;
+    private Command cmdPlSelect;
+    private Command cmdPlBack;
+
+    // --- UI: Profile edit form ---
+    private Form      editForm;
+    private TextField tfProfileName;
+    private TextField tfNick;
+    private TextField tfAltNick;
+    private TextField tfChannel;
+    private TextField tfWifi;
+    private TextField tfServer;
+    private TextField tfPort;
+    private TextField tfPassword;
+    private Command   cmdEditSave;
+    private Command   cmdEditCancel;
+    private int       editingIndex = -1; // -1 = new profile
+
+    // --- UI: Chat ---
     private ChatCanvas chatCanvas;
     private TextBox    inputBox;
     private Command    cmdSend;
@@ -74,163 +112,306 @@ public class IRCClient implements CommandListener, Runnable {
     private Command    cmdInputOk;
     private Command    cmdInputCancel;
 
+    // =========================================================
+    // Constructor
+    // =========================================================
+
     public IRCClient(IRCMidlet midlet) {
         this.midlet = midlet;
-        buildConnectScreen();
+        loadProfiles();
+        buildMainForm();
         chatCanvas = new ChatCanvas();
-        loadSettings();
     }
 
-    // -------------------------
-    // --- RMS ---
-    // -------------------------
+    // =========================================================
+    // RMS — Profiles
+    // =========================================================
 
-    private void saveSettings() {
-        try {
-            RecordStore rs = RecordStore.openRecordStore(RMS_KEY, true);
-            String data  = tfNick.getString() + "|" +
-                           tfChannel.getString() + "|" +
-                           tfWifi.getString() + "|" +
-                           tfServer.getString() + "|" +
-                           tfPort.getString() + "|" +
-                           tfPassword.getString() + "|" +
-                           tfAltNick.getString();
-            byte[] bytes = data.getBytes();
-            if (rs.getNumRecords() == 0) {
-                rs.addRecord(bytes, 0, bytes.length);
-            } else {
-                rs.setRecord(1, bytes, 0, bytes.length);
-            }
-            rs.closeRecordStore();
-        } catch (Exception e) {}
-    }
+    // Profile record format: name|nick|altNick|channel|wifi|server|port|password
+    // Record IDs in RMS are 1-based; we store profile i at record (i+1).
 
-    private void loadSettings() {
+    private void loadProfiles() {
+        profiles.removeAllElements();
+        activeProfile = 0;
+
+        // Load active index
         try {
-            RecordStore rs = RecordStore.openRecordStore(RMS_KEY, false);
+            RecordStore rs = RecordStore.openRecordStore(RMS_ACTIVE, false);
             if (rs.getNumRecords() > 0) {
-                byte[] bytes = rs.getRecord(1);
-                String data  = new String(bytes);
-                // 7 fields: nick|channel|wifi|server|port|password|altNick
-                String[] parts = new String[7];
-                for (int i = 0; i < parts.length; i++) parts[i] = "";
-                int count = 0, start = 0;
-                for (int i = 0; i <= data.length() && count < 6; i++) {
-                    if (i == data.length() || data.charAt(i) == '|') {
-                        parts[count++] = data.substring(start, i);
-                        start = i + 1;
-                    }
-                }
-                // last field (altNick) — remainder after 6th pipe
-                if (count == 6 && start <= data.length()) {
-                    parts[6] = data.substring(start);
-                }
+                String s = new String(rs.getRecord(1)).trim();
+                try { activeProfile = Integer.parseInt(s); } catch (Exception e) {}
+            }
+            rs.closeRecordStore();
+        } catch (Exception e) {}
 
-                if (parts[0].length() > 0) tfNick.setString(parts[0]);
-                if (parts[1].length() > 0) tfChannel.setString(parts[1]);
-                if (parts[2].length() > 0) tfWifi.setString(parts[2]);
-                if (parts[3].length() > 0) tfServer.setString(parts[3]);
-                if (parts[4].length() > 0) tfPort.setString(parts[4]);
-                if (parts[5].length() > 0) tfPassword.setString(parts[5]);
-                if (parts[6].length() > 0) tfAltNick.setString(parts[6]);
+        // Load profile records
+        try {
+            RecordStore rs = RecordStore.openRecordStore(RMS_PROFILES, false);
+            int n = rs.getNumRecords();
+            for (int id = 1; id <= n; id++) {
+                try {
+                    byte[] b = rs.getRecord(id);
+                    if (b != null) {
+                        String[] p = parseProfile(new String(b));
+                        profiles.addElement(p);
+                    }
+                } catch (Exception e) {}
+            }
+            rs.closeRecordStore();
+        } catch (Exception e) {}
+
+        // Clamp activeProfile
+        if (activeProfile >= profiles.size()) activeProfile = 0;
+
+        // If no profiles, create a default one
+        if (profiles.isEmpty()) {
+            String[] def = new String[] {
+                "Default", "BBUser", "BBUser_",
+                "#libera", "N", DEFAULT_HOST,
+                String.valueOf(DEFAULT_PORT), ""
+            };
+            profiles.addElement(def);
+            saveAllProfiles();
+            saveActiveIndex();
+        }
+    }
+
+    private String[] parseProfile(String data) {
+        String[] p = new String[8];
+        for (int i = 0; i < p.length; i++) p[i] = "";
+        int count = 0, start = 0;
+        for (int i = 0; i <= data.length() && count < 7; i++) {
+            if (i == data.length() || data.charAt(i) == '|') {
+                p[count++] = data.substring(start, i);
+                start = i + 1;
+            }
+        }
+        // last field (password) = remainder
+        if (count == 7 && start <= data.length()) {
+            p[7] = data.substring(start);
+        }
+        return p;
+    }
+
+    private String profileToString(String[] p) {
+        StringBuffer sb = new StringBuffer();
+        for (int i = 0; i < 7; i++) {
+            sb.append(p[i] == null ? "" : p[i]);
+            sb.append('|');
+        }
+        sb.append(p[7] == null ? "" : p[7]);
+        return sb.toString();
+    }
+
+    private void saveAllProfiles() {
+        try {
+            // Delete and recreate to avoid stale records
+            try { RecordStore.deleteRecordStore(RMS_PROFILES); } catch (Exception e) {}
+            RecordStore rs = RecordStore.openRecordStore(RMS_PROFILES, true);
+            for (int i = 0; i < profiles.size(); i++) {
+                String[] p = (String[]) profiles.elementAt(i);
+                byte[] b = profileToString(p).getBytes();
+                rs.addRecord(b, 0, b.length);
             }
             rs.closeRecordStore();
         } catch (Exception e) {}
     }
 
-    // -------------------------
-    // --- Screen builders ---
-    // -------------------------
-
-    private void buildConnectScreen() {
-        connectForm = new Form("BBIRC v" + midlet.getAppProperty("MIDlet-Version"));
-        tfNick     = new TextField("Nickname:", "BBUser",  32, TextField.ANY);
-        tfAltNick  = new TextField("Alt Nick (optional):", "BBUser_", 32, TextField.ANY);
-        tfChannel  = new TextField("Channel:",  "#libera", 64, TextField.ANY);
-        tfWifi     = new TextField("Force Wi-Fi (Y/N):", "N", 1, TextField.ANY);
-        tfServer   = new TextField("Server:", HOST, 64, TextField.ANY);
-        tfPort     = new TextField("Port:", String.valueOf(PORT), 5, TextField.NUMERIC);
-        tfPassword = new TextField("NickServ Password:", "", 64, TextField.PASSWORD);
-        connectForm.append(tfNick);
-        connectForm.append(tfAltNick);
-        connectForm.append(tfChannel);
-        connectForm.append(tfWifi);
-        connectForm.append(tfServer);
-        connectForm.append(tfPort);
-        connectForm.append(tfPassword);
-        connectForm.append(new StringItem("Credits:", "Developed by AzizBgBoss"));
-        connectForm.append(new StringItem("GitHub:", "github.com/AzizBgBoss/BBIRC"));
-
-        cmdConnect = new Command("Connect", Command.OK,   1);
-        cmdQuit    = new Command("Quit",    Command.EXIT, 2);
-        connectForm.addCommand(cmdConnect);
-        connectForm.addCommand(cmdQuit);
-        connectForm.setCommandListener(this);
+    private void saveActiveIndex() {
+        try {
+            RecordStore rs = RecordStore.openRecordStore(RMS_ACTIVE, true);
+            byte[] b = String.valueOf(activeProfile).getBytes();
+            if (rs.getNumRecords() == 0) {
+                rs.addRecord(b, 0, b.length);
+            } else {
+                rs.setRecord(1, b, 0, b.length);
+            }
+            rs.closeRecordStore();
+        } catch (Exception e) {}
     }
 
-    private void buildChatCanvas(String channel) {
-        chatCanvas = new ChatCanvas();
-        chatCanvas.setTitle(channel);
+    // =========================================================
+    // Main Form
+    // =========================================================
 
-        cmdSend  = new Command("Send",  Command.OK,     1);
-        cmdLeave = new Command("Leave", Command.EXIT,   2);
-        cmdClear = new Command("Clear", Command.SCREEN, 3);
-        chatCanvas.addCommand(cmdSend);
-        chatCanvas.addCommand(cmdLeave);
-        chatCanvas.addCommand(cmdClear);
-        chatCanvas.setCommandListener(this);
+    private void buildMainForm() {
+        mainForm = new Form("BBIRC v" + midlet.getAppProperty("MIDlet-Version"));
+
+        siProfileName = new StringItem("Profile:", getActiveProfileDisplay());
+        mainForm.append(siProfileName);
+        mainForm.append(new StringItem("", ""));  // spacer
+        mainForm.append(new StringItem("", ""));  // spacer
+        mainForm.append(new StringItem("Credits:", "Made by AzizBgBoss"));
+        mainForm.append(new StringItem("GitHub:", "github.com/AzizBgBoss/BBIRC"));
+
+        cmdMainConnect  = new Command("Connect",  Command.OK,     1);
+        cmdMainProfiles = new Command("Profiles", Command.SCREEN, 2);
+        cmdMainQuit     = new Command("Quit",     Command.EXIT,   3);
+        mainForm.addCommand(cmdMainConnect);
+        mainForm.addCommand(cmdMainProfiles);
+        mainForm.addCommand(cmdMainQuit);
+        mainForm.setCommandListener(this);
     }
 
-    // -------------------------
-    // --- Connection ---
-    // -------------------------
+    private String getActiveProfileDisplay() {
+        if (profiles.isEmpty()) return "(none)";
+        String[] p = (String[]) profiles.elementAt(activeProfile);
+        return p[0] + "  (" + p[1] + " @ " + p[3] + ")";
+    }
+
+    private void refreshMainForm() {
+        siProfileName.setText(getActiveProfileDisplay());
+    }
+
+    // =========================================================
+    // Profile List Screen
+    // =========================================================
+
+    private void buildProfileList() {
+        profileList = new List("Profiles", List.IMPLICIT);
+        for (int i = 0; i < profiles.size(); i++) {
+            String[] p = (String[]) profiles.elementAt(i);
+            String marker = (i == activeProfile) ? "* " : "  ";
+            profileList.append(marker + p[0], null);
+        }
+
+        cmdPlSelect = new Command("Select", Command.OK,     1);
+        cmdPlNew    = new Command("New",    Command.SCREEN, 2);
+        cmdPlEdit   = new Command("Edit",   Command.SCREEN, 3);
+        cmdPlDelete = new Command("Delete", Command.SCREEN, 4);
+        cmdPlBack   = new Command("Back",   Command.BACK,   5);
+
+        profileList.addCommand(cmdPlSelect);
+        profileList.addCommand(cmdPlNew);
+        profileList.addCommand(cmdPlEdit);
+        profileList.addCommand(cmdPlDelete);
+        profileList.addCommand(cmdPlBack);
+        profileList.setCommandListener(this);
+        // also fire SELECT command on implicit list tap
+        profileList.setSelectCommand(cmdPlSelect);
+    }
+
+    // =========================================================
+    // Profile Edit Form
+    // =========================================================
+
+    private void buildEditForm(int index) {
+        editingIndex = index;
+        String[] p;
+        String title;
+
+        if (index == -1) {
+            // New profile — blank defaults
+            p = new String[] { "", "BBUser", "BBUser_", "#libera", "N",
+                               DEFAULT_HOST, String.valueOf(DEFAULT_PORT), "" };
+            title = "New Profile";
+        } else {
+            p = (String[]) profiles.elementAt(index);
+            title = "Edit: " + p[0];
+        }
+
+        editForm = new Form(title);
+        tfProfileName = new TextField("Profile Name:", p[0], 32, TextField.ANY);
+        tfNick        = new TextField("Nickname:",     p[1], 32, TextField.ANY);
+        tfAltNick     = new TextField("Alt Nick:",     p[2], 32, TextField.ANY);
+        tfChannel     = new TextField("Channel:",      p[3], 64, TextField.ANY);
+        tfWifi        = new TextField("Force Wi-Fi (Y/N):", p[4], 1, TextField.ANY);
+        tfServer      = new TextField("Server:",       p[5], 64, TextField.ANY);
+        tfPort        = new TextField("Port:",         p[6],  5, TextField.NUMERIC);
+        tfPassword    = new TextField("NickServ Pass:", p[7], 64, TextField.PASSWORD);
+
+        editForm.append(tfProfileName);
+        editForm.append(tfNick);
+        editForm.append(tfAltNick);
+        editForm.append(tfChannel);
+        editForm.append(tfWifi);
+        editForm.append(tfServer);
+        editForm.append(tfPort);
+        editForm.append(tfPassword);
+
+        cmdEditSave   = new Command("Save",   Command.OK,   1);
+        cmdEditCancel = new Command("Cancel", Command.BACK, 2);
+        editForm.addCommand(cmdEditSave);
+        editForm.addCommand(cmdEditCancel);
+        editForm.setCommandListener(this);
+    }
+
+    private void saveEditForm() {
+        String name = tfProfileName.getString().trim();
+        if (name.length() == 0) name = "Profile " + (profiles.size() + 1);
+
+        String ch = tfChannel.getString().trim();
+        if (ch.length() > 0 && !ch.startsWith("#")) ch = "#" + ch;
+
+        String[] p = new String[] {
+            name,
+            tfNick.getString().trim(),
+            tfAltNick.getString().trim(),
+            ch,
+            tfWifi.getString().trim().toUpperCase(),
+            tfServer.getString().trim(),
+            tfPort.getString().trim(),
+            tfPassword.getString().trim()
+        };
+        if (p[1].length() == 0) p[1] = "BBUser";
+        if (p[5].length() == 0) p[5] = DEFAULT_HOST;
+        if (p[6].length() == 0) p[6] = String.valueOf(DEFAULT_PORT);
+
+        if (editingIndex == -1) {
+            profiles.addElement(p);
+        } else {
+            profiles.setElementAt(p, editingIndex);
+        }
+        saveAllProfiles();
+    }
+
+    // =========================================================
+    // Connect using active profile
+    // =========================================================
 
     private void connect() {
-        // Guard: don't connect if already connected or connecting
         if (connected || connecting) {
             if (connected) {
-                // Already connected, just go back to chat
                 midlet.getDisplay().setCurrent(chatCanvas);
             } else {
-                showAlert("Please wait", "Already connecting...", connectForm);
+                showAlert("Please wait", "Already connecting...", mainForm);
             }
             return;
         }
 
-        nick = tfNick.getString().trim();
-        altNick = tfAltNick.getString().trim();
-        String channel = tfChannel.getString().trim();
-        nsPassword = tfPassword.getString().trim();
+        if (profiles.isEmpty()) {
+            showAlert("Error", "No profiles. Create one first.", mainForm);
+            return;
+        }
+
+        String[] p = (String[]) profiles.elementAt(activeProfile);
+        nick       = p[1].trim();
+        altNick    = p[2].trim();
+        String channel = p[3].trim();
+        nsPassword = p[7].trim();
 
         if (nick.length() == 0) {
-            showAlert("Error", "Enter a nickname.", connectForm);
+            showAlert("Error", "Profile has no nickname.", mainForm);
             return;
         }
         if (channel.length() == 0) {
-            showAlert("Error", "Enter a channel.", connectForm);
+            showAlert("Error", "Profile has no channel.", mainForm);
             return;
         }
         if (!channel.startsWith("#")) channel = "#" + channel;
 
-        server = tfServer.getString().trim();
-        if (server.length() == 0) server = HOST;
+        server = p[5].trim();
+        if (server.length() == 0) server = DEFAULT_HOST;
 
-        try {
-            port = Integer.parseInt(tfPort.getString().trim());
-        } catch (Exception e) {
-            port = PORT;
-        }
-        if (port <= 0) port = PORT;
+        try { port = Integer.parseInt(p[6].trim()); }
+        catch (Exception e) { port = DEFAULT_PORT; }
+        if (port <= 0) port = DEFAULT_PORT;
 
-        String wifi = tfWifi.getString().trim().toUpperCase();
-        forceWifi = wifi.equals("Y");
+        forceWifi = "Y".equals(p[4].trim().toUpperCase());
 
-        saveSettings();
-
-        // show chat canvas right away with a connecting indication
         buildChatCanvas(channel);
         chatCanvas.setTitle("Connecting...");
-        addMessage("", "* Connecting...", MSG_SYSTEM);
+        addMessage("", "* Connecting to " + server + ":" + port + " as " + nick, MSG_SYSTEM);
         midlet.getDisplay().setCurrent(chatCanvas);
 
         connecting = true;
@@ -259,27 +440,29 @@ public class IRCClient implements CommandListener, Runnable {
 
                 } catch (Exception e) {
                     connecting = false;
-                    showAlert("Error", "Could not connect: " + e.getMessage(), connectForm);
+                    showAlert("Error", "Could not connect: " + e.getMessage(), mainForm);
                 }
             }
         }).start();
     }
 
-    // Full disconnect — called only from Leave or app destroy
+    // =========================================================
+    // Disconnect
+    // =========================================================
+
     public void disconnect() {
         namesBuffer.setLength(0);
         running    = false;
         connecting = false;
         try {
-            if (connected && out != null) sendRaw("QUIT :BB IRC");
+            if (connected && out != null) sendRaw("QUIT :BBIRC");
         } catch (Exception e) {}
-        connected  = false;
-        registered = false;
+        connected      = false;
+        registered     = false;
         pendingChannel = null;
         closeIO();
     }
 
-    // Just close sockets quietly on error
     private void closeIO() {
         try { if (in     != null) in.close();     } catch (Exception e) {}
         try { if (out    != null) out.close();    } catch (Exception e) {}
@@ -287,9 +470,9 @@ public class IRCClient implements CommandListener, Runnable {
         in = null; out = null; socket = null;
     }
 
-    // -------------------------
-    // --- Send ---
-    // -------------------------
+    // =========================================================
+    // Send
+    // =========================================================
 
     private boolean sendRaw(String line) {
         try {
@@ -318,16 +501,15 @@ public class IRCClient implements CommandListener, Runnable {
         sendRaw("JOIN " + channel);
         midlet.getDisplay().callSerially(new Runnable() {
             public void run() {
-                // do not clear messages; keep status lines like "Connecting..." and "Connected!"
                 buildChatCanvas(channel);
                 midlet.getDisplay().setCurrent(chatCanvas);
             }
         });
     }
 
-    // -------------------------
-    // --- Read loop ---
-    // -------------------------
+    // =========================================================
+    // Read loop
+    // =========================================================
 
     public void run() {
         StringBuffer lineBuf = new StringBuffer();
@@ -346,7 +528,7 @@ public class IRCClient implements CommandListener, Runnable {
             }
         } catch (Exception e) {
             if (running) {
-                showAlert("Disconnected", "Connection lost: " + e.getMessage(), connectForm);
+                showAlert("Disconnected", "Connection lost: " + e.getMessage(), mainForm);
             }
         }
         running    = false;
@@ -355,9 +537,9 @@ public class IRCClient implements CommandListener, Runnable {
         closeIO();
     }
 
-    // -------------------------
-    // --- IRC protocol ---
-    // -------------------------
+    // =========================================================
+    // IRC Protocol
+    // =========================================================
 
     private void handleLine(String line) {
         if (line.startsWith("PING")) {
@@ -413,7 +595,9 @@ public class IRCClient implements CommandListener, Runnable {
                 nick = c2 != -1 ? params.substring(c2 + 1) : params;
                 addMessage("", "* You are now known as " + nick, MSG_SYSTEM);
             } else {
-                addMessage("", "* " + senderNick + " is now known as " + params, MSG_SYSTEM);
+                int c2 = params.indexOf(':');
+                String newNick = c2 != -1 ? params.substring(c2 + 1) : params;
+                addMessage("", "* " + senderNick + " is now " + newNick, MSG_SYSTEM);
             }
         } else if (command.equals("353")) {
             int colon = params.lastIndexOf(':');
@@ -423,7 +607,6 @@ public class IRCClient implements CommandListener, Runnable {
                 namesBuffer.append(chunk);
             }
         } else if (command.equals("366")) {
-            // end of names — now display
             String names = namesBuffer.toString().trim();
             namesBuffer.setLength(0);
             if (names.length() == 0) return;
@@ -445,6 +628,7 @@ public class IRCClient implements CommandListener, Runnable {
             }
             if (total > 10) sb.append(" +").append(total - 10).append(" more");
             addMessage("", sb.toString(), MSG_SYSTEM);
+
         } else if (command.equals("433")) {
             if (altNick != null && altNick.length() > 0) {
                 nick = altNick;
@@ -472,14 +656,12 @@ public class IRCClient implements CommandListener, Runnable {
         }
     }
 
-    // -------------------------
-    // --- Notifications ---
-    // -------------------------
+    // =========================================================
+    // Notifications / Errors
+    // =========================================================
 
     private void notification() {
-        try {
-            midlet.getDisplay().vibrate(100);
-        } catch (Exception e) {}
+        try { midlet.getDisplay().vibrate(100); } catch (Exception e) {}
     }
 
     private void handleIOError(Exception e) {
@@ -487,12 +669,12 @@ public class IRCClient implements CommandListener, Runnable {
         running    = false;
         registered = false;
         closeIO();
-        showAlert("Error", "Network error: " + e.getMessage(), connectForm);
+        showAlert("Error", "Network error: " + e.getMessage(), mainForm);
     }
 
-    // -------------------------
-    // --- Messages ---
-    // -------------------------
+    // =========================================================
+    // Messages
+    // =========================================================
 
     private synchronized void addMessage(final String msgNick,
                                          final String text,
@@ -526,21 +708,98 @@ public class IRCClient implements CommandListener, Runnable {
         return n < 10 ? "0" + n : String.valueOf(n);
     }
 
-    // -------------------------
-    // --- Commands ---
-    // -------------------------
+    // =========================================================
+    // Chat Canvas builder
+    // =========================================================
+
+    private void buildChatCanvas(String channel) {
+        chatCanvas = new ChatCanvas();
+        chatCanvas.setTitle(channel);
+
+        cmdSend  = new Command("Send",  Command.OK,     1);
+        cmdLeave = new Command("Leave", Command.EXIT,   2);
+        cmdClear = new Command("Clear", Command.SCREEN, 3);
+        chatCanvas.addCommand(cmdSend);
+        chatCanvas.addCommand(cmdLeave);
+        chatCanvas.addCommand(cmdClear);
+        chatCanvas.setCommandListener(this);
+    }
+
+    // =========================================================
+    // CommandListener
+    // =========================================================
 
     public void commandAction(Command c, Displayable d) {
 
-        if (d == connectForm) {
-            if (c == cmdConnect) {
+        // --- Main form ---
+        if (d == mainForm) {
+            if (c == cmdMainConnect) {
                 connect();
-            } else if (c == cmdQuit) {
+            } else if (c == cmdMainProfiles) {
+                buildProfileList();
+                midlet.getDisplay().setCurrent(profileList);
+            } else if (c == cmdMainQuit) {
                 disconnect();
                 midlet.quit();
             }
         }
 
+        // --- Profile list ---
+        else if (d == profileList) {
+            int idx = profileList.getSelectedIndex();
+            if (c == cmdPlSelect) {
+                if (idx >= 0) {
+                    activeProfile = idx;
+                    saveActiveIndex();
+                    refreshMainForm();
+                }
+                midlet.getDisplay().setCurrent(mainForm);
+            } else if (c == cmdPlNew) {
+                if (profiles.size() >= MAX_PROFILES) {
+                    showAlert("Limit", "Max " + MAX_PROFILES + " profiles.", profileList);
+                } else {
+                    buildEditForm(-1);
+                    midlet.getDisplay().setCurrent(editForm);
+                }
+            } else if (c == cmdPlEdit) {
+                if (idx >= 0) {
+                    buildEditForm(idx);
+                    midlet.getDisplay().setCurrent(editForm);
+                } else {
+                    showAlert("Edit", "Select a profile first.", profileList);
+                }
+            } else if (c == cmdPlDelete) {
+                if (profiles.size() <= 1) {
+                    showAlert("Delete", "Cannot delete the only profile.", profileList);
+                } else if (idx >= 0) {
+                    profiles.removeElementAt(idx);
+                    if (activeProfile >= profiles.size()) activeProfile = profiles.size() - 1;
+                    saveAllProfiles();
+                    saveActiveIndex();
+                    // Rebuild list in place
+                    buildProfileList();
+                    midlet.getDisplay().setCurrent(profileList);
+                }
+            } else if (c == cmdPlBack) {
+                refreshMainForm();
+                midlet.getDisplay().setCurrent(mainForm);
+            }
+        }
+
+        // --- Edit form ---
+        else if (d == editForm) {
+            if (c == cmdEditSave) {
+                saveEditForm();
+                // If we just edited the active profile, refresh main form label
+                buildProfileList();
+                refreshMainForm();
+                midlet.getDisplay().setCurrent(profileList);
+            } else if (c == cmdEditCancel) {
+                midlet.getDisplay().setCurrent(profileList);
+            }
+        }
+
+        // --- Chat canvas ---
         else if (d == chatCanvas) {
             if (c == cmdSend) {
                 inputBox       = new TextBox("Message", "", 256, TextField.ANY);
@@ -551,23 +810,22 @@ public class IRCClient implements CommandListener, Runnable {
                 inputBox.setCommandListener(this);
                 midlet.getDisplay().setCurrent(inputBox);
             } else if (c == cmdLeave) {
-                // Full disconnect — user explicitly left
                 sendRaw("PART " + currentChannel + " :leaving");
                 disconnect();
-                midlet.getDisplay().setCurrent(connectForm);
+                midlet.getDisplay().setCurrent(mainForm);
             } else if (c == cmdClear) {
                 synchronized (IRCClient.this) {
                     messages.removeAllElements();
                     timestamps.removeAllElements();
                 }
                 if (chatCanvas != null) {
-                    chatCanvas.resetScroll(); // this already invalidates cache
+                    chatCanvas.resetScroll();
                     chatCanvas.repaint();
                 }
             }
-            // Red phone button (destroyApp) is handled in IRCMidlet — does nothing here
         }
 
+        // --- Input box ---
         else if (d == inputBox) {
             if (c.getCommandType() == Command.OK) {
                 String msg = inputBox.getString().trim().replace('\n', ' ');
@@ -579,43 +837,45 @@ public class IRCClient implements CommandListener, Runnable {
         }
     }
 
-    // Called by IRCMidlet.pauseApp() — keep connection alive, just hide
+    // =========================================================
+    // Lifecycle
+    // =========================================================
+
     public void goBackground() {
         // do nothing — socket stays open
     }
 
-    // Called by IRCMidlet.startApp() on resume — go back to chat if connected
     public void resume() {
         if (connected && chatCanvas != null) {
             midlet.getDisplay().setCurrent(chatCanvas);
         }
     }
 
+    public Displayable getMainScreen() {
+        return mainForm;
+    }
+
+    // =========================================================
+    // Helpers
+    // =========================================================
+
     private void showAlert(String title, String msg, Displayable next) {
         Alert a = new Alert(title, msg, null, AlertType.INFO);
         a.setTimeout(2000);
-        if (next != null) {
-            midlet.getDisplay().setCurrent(a, next);
-        } else {
-            midlet.getDisplay().setCurrent(a);
-        }
+        midlet.getDisplay().setCurrent(a, next);
     }
 
-    public Displayable getConnectScreen() {
-        return connectForm;
-    }
-
-    // -------------------------
-    // --- Chat Canvas ---
-    // -------------------------
+    // =========================================================
+    // Chat Canvas
+    // =========================================================
 
     private class ChatCanvas extends Canvas {
 
-        private int[] cachedMsgLines = new int[0];
-        private int   cachedMsgCount = 0;
-        private int   cachedWidth    = 0;
-        private String title = "";
-        private int scrollOffset = 0; // lines scrolled up from bottom
+        private int[]  cachedMsgLines = new int[0];
+        private int    cachedMsgCount = 0;
+        private int    cachedWidth    = 0;
+        private String title          = "";
+        private int    scrollOffset   = 0;
 
         protected void keyPressed(int keyCode) {
             int action = getGameAction(keyCode);
@@ -629,11 +889,13 @@ public class IRCClient implements CommandListener, Runnable {
         }
 
         public void resetScroll() {
-            scrollOffset = 0;
-            cachedMsgCount = -1; // force cache rebuild
+            scrollOffset   = 0;
+            cachedMsgCount = -1; // invalidate cache
         }
 
         public void setTitle(String t) { this.title = t; }
+
+        // --- Cache ---
 
         private void rebuildCache(Font fontSmall, int W) {
             int msgCount = messages.size();
@@ -658,6 +920,8 @@ public class IRCClient implements CommandListener, Runnable {
             cachedWidth    = W;
         }
 
+        // --- Text wrap ---
+
         private String[] wrapText(String text, Font font, int maxWidth) {
             Vector lines = new Vector();
             while (text.length() > 0) {
@@ -665,12 +929,8 @@ public class IRCClient implements CommandListener, Runnable {
                     lines.addElement(text);
                     break;
                 }
-                // find last space that fits
                 int cut = text.length() - 1;
-                while (cut > 0 && font.stringWidth(text.substring(0, cut)) > maxWidth) {
-                    cut--;
-                }
-                // if no space found, hard break at cut
+                while (cut > 0 && font.stringWidth(text.substring(0, cut)) > maxWidth) cut--;
                 int space = text.lastIndexOf(' ', cut);
                 if (space > 0) cut = space;
                 lines.addElement(text.substring(0, cut));
@@ -678,14 +938,12 @@ public class IRCClient implements CommandListener, Runnable {
             }
             if (lines.isEmpty()) lines.addElement("");
             String[] result = new String[lines.size()];
-            for (int i = 0; i < lines.size(); i++) {
-                result[i] = (String) lines.elementAt(i);
-            }
+            for (int i = 0; i < lines.size(); i++) result[i] = (String) lines.elementAt(i);
             return result;
         }
 
-        // Returns true if message i should be grouped with the previous one:
-        // same sender, not system, and within 10 minutes
+        // --- Grouping ---
+
         private boolean isGrouped(int i) {
             if (i == 0) return false;
             String[] cur  = (String[]) messages.elementAt(i);
@@ -694,28 +952,22 @@ public class IRCClient implements CommandListener, Runnable {
             int prevType = Integer.parseInt(prev[2]);
             if (curType  == MSG_SYSTEM) return false;
             if (prevType == MSG_SYSTEM) return false;
-            // same nick?
             if (!cur[0].equals(prev[0])) return false;
-            // within 10 minutes? compare timestamps "HH:MM"
             String tsCur  = (String) timestamps.elementAt(i);
             String tsPrev = (String) timestamps.elementAt(i - 1);
-            int minCur  = tsToMinutes(tsCur);
-            int minPrev = tsToMinutes(tsPrev);
-            int diff = minCur - minPrev;
-            if (diff < 0) diff += 1440; // midnight rollover
+            int diff = tsToMinutes(tsCur) - tsToMinutes(tsPrev);
+            if (diff < 0) diff += 1440;
             return diff <= 10;
         }
 
         private int tsToMinutes(String ts) {
-            // ts format: "HH:MM"
             try {
-                int h = Integer.parseInt(ts.substring(0, 2));
-                int m = Integer.parseInt(ts.substring(3, 5));
-                return h * 60 + m;
-            } catch (Exception e) {
-                return 0;
-            }
+                return Integer.parseInt(ts.substring(0, 2)) * 60
+                     + Integer.parseInt(ts.substring(3, 5));
+            } catch (Exception e) { return 0; }
         }
+
+        // --- Paint ---
 
         protected void paint(Graphics g) {
             int W = getWidth();
@@ -757,37 +1009,31 @@ public class IRCClient implements CommandListener, Runnable {
             int msgCount = messages.size();
             if (msgCount == 0) return;
 
-            // --- count lines per message (cached) ---
+            // Rebuild cache if needed
             if (msgCount != cachedMsgCount || W != cachedWidth) {
                 rebuildCache(fontSmall, W);
             }
             int[] msgLines = cachedMsgLines;
 
-            // total lines across all messages
             int totalLines = 0;
             for (int i = 0; i < msgCount; i++) totalLines += msgLines[i];
 
-            // clamp scroll to valid range
             int maxScroll = totalLines - maxLines;
             if (maxScroll < 0) maxScroll = 0;
             if (scrollOffset > maxScroll) scrollOffset = maxScroll;
             if (scrollOffset < 0) scrollOffset = 0;
 
-            // skip lines from top to find start message
             int skipLines = totalLines - maxLines - scrollOffset;
             if (skipLines < 0) skipLines = 0;
 
-            int start = 0;
-            int skipped = 0;
+            int start = 0, skipped = 0;
             while (start < msgCount && skipped + msgLines[start] <= skipLines) {
                 skipped += msgLines[start];
                 start++;
             }
             int partialSkip = skipLines - skipped;
-
             int y = chatTop - partialSkip * lineH;
 
-            // clip to chat area only
             g.setClip(0, chatTop, W, chatBot - chatTop);
 
             synchronized (IRCClient.this) {
@@ -798,8 +1044,7 @@ public class IRCClient implements CommandListener, Runnable {
                     String   text    = msg[1];
                     int      type    = Integer.parseInt(msg[2]);
                     boolean  grouped = isGrouped(i);
-
-                    int tsW = fontSmall.stringWidth(ts + " ");
+                    int      tsW     = fontSmall.stringWidth(ts + " ");
 
                     if (type == MSG_SYSTEM) {
                         g.setFont(fontSmall);
@@ -824,7 +1069,10 @@ public class IRCClient implements CommandListener, Runnable {
                         g.setColor(COLOR_TIMESTAMP);
                         g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
                         g.setFont(fontBold);
-                        g.setColor(type == MSG_SELF ? COLOR_NICK_SELF : (Math.abs(msgNick.hashCode()) % 0xAAAAAA + 0x555555)); // Color unique to every name
+                        int nickColor = type == MSG_SELF
+                            ? COLOR_NICK_SELF
+                            : (Math.abs(msgNick.hashCode()) % 0xAAAAAA + 0x555555);
+                        g.setColor(nickColor);
                         g.drawString(msgNick + ":", tsW, y, Graphics.TOP | Graphics.LEFT);
                         y += lineH;
 
