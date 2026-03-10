@@ -267,6 +267,7 @@ public class IRCClient implements CommandListener, Runnable {
 
     // Full disconnect — called only from Leave or app destroy
     public void disconnect() {
+        namesBuffer.setLength(0);
         running    = false;
         connecting = false;
         try {
@@ -312,6 +313,7 @@ public class IRCClient implements CommandListener, Runnable {
     }
 
     private void joinChannel(final String channel) {
+        namesBuffer.setLength(0);
         currentChannel = channel;
         sendRaw("JOIN " + channel);
         midlet.getDisplay().callSerially(new Runnable() {
@@ -405,6 +407,14 @@ public class IRCClient implements CommandListener, Runnable {
             addMessage("", "* " + senderNick + " left", MSG_SYSTEM);
         } else if (command.equals("QUIT")) {
             addMessage("", "* " + senderNick + " quit", MSG_SYSTEM);
+        } else if (command.equals("NICK")) {
+            if (senderNick.equals(nick)) {
+                int c2 = params.indexOf(':');
+                nick = c2 != -1 ? params.substring(c2 + 1) : params;
+                addMessage("", "* You are now known as " + nick, MSG_SYSTEM);
+            } else {
+                addMessage("", "* " + senderNick + " is now known as " + params, MSG_SYSTEM);
+            }
         } else if (command.equals("353")) {
             int colon = params.lastIndexOf(':');
             if (colon != -1) {
@@ -546,11 +556,12 @@ public class IRCClient implements CommandListener, Runnable {
                 disconnect();
                 midlet.getDisplay().setCurrent(connectForm);
             } else if (c == cmdClear) {
-                // Just clear messages, keep connection and channel
-                messages.removeAllElements();
-                timestamps.removeAllElements();
+                synchronized (IRCClient.this) {
+                    messages.removeAllElements();
+                    timestamps.removeAllElements();
+                }
                 if (chatCanvas != null) {
-                    chatCanvas.resetScroll();
+                    chatCanvas.resetScroll(); // this already invalidates cache
                     chatCanvas.repaint();
                 }
             }
@@ -813,7 +824,7 @@ public class IRCClient implements CommandListener, Runnable {
                         g.setColor(COLOR_TIMESTAMP);
                         g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
                         g.setFont(fontBold);
-                        g.setColor(type == MSG_SELF ? COLOR_NICK_SELF : msgNick.hashCode() % 0x1000000); // Color unique to every name
+                        g.setColor(type == MSG_SELF ? COLOR_NICK_SELF : (Math.abs(msgNick.hashCode()) % 0xAAAAAA + 0x555555)); // Color unique to every name
                         g.drawString(msgNick + ":", tsW, y, Graphics.TOP | Graphics.LEFT);
                         y += lineH;
 
