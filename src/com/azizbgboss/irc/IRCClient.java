@@ -30,6 +30,7 @@ public class IRCClient implements CommandListener, Runnable {
 
     // --- State ---
     private String  nick;
+    private String  altNick;
     private String  server;
     private String  nsPassword; // optional NickServ password
     private int     port;
@@ -56,6 +57,7 @@ public class IRCClient implements CommandListener, Runnable {
     private IRCMidlet  midlet;
     private Form       connectForm;
     private TextField  tfNick;
+    private TextField  tfAltNick;
     private TextField  tfChannel;
     private TextField  tfWifi;
     private TextField  tfServer;
@@ -89,7 +91,8 @@ public class IRCClient implements CommandListener, Runnable {
                            tfWifi.getString() + "|" +
                            tfServer.getString() + "|" +
                            tfPort.getString() + "|" +
-                           tfPassword.getString();
+                           tfPassword.getString() + "|" +
+                           tfAltNick.getString();
             byte[] bytes = data.getBytes();
             if (rs.getNumRecords() == 0) {
                 rs.addRecord(bytes, 0, bytes.length);
@@ -104,24 +107,30 @@ public class IRCClient implements CommandListener, Runnable {
         try {
             RecordStore rs = RecordStore.openRecordStore(RMS_KEY, false);
             if (rs.getNumRecords() > 0) {
-                byte[]   bytes = rs.getRecord(1);
-                String   data  = new String(bytes);
-                String[] parts = new String[6];
+                byte[] bytes = rs.getRecord(1);
+                String data  = new String(bytes);
+                // 7 fields: nick|channel|wifi|server|port|password|altNick
+                String[] parts = new String[7];
+                for (int i = 0; i < parts.length; i++) parts[i] = "";
                 int count = 0, start = 0;
-                for (int i = 0; i <= data.length() && count < 5; i++) {
+                for (int i = 0; i <= data.length() && count < 6; i++) {
                     if (i == data.length() || data.charAt(i) == '|') {
                         parts[count++] = data.substring(start, i);
                         start = i + 1;
                     }
                 }
-                parts[5] = start < data.length() ? data.substring(start) : "";
+                // last field (altNick) — remainder after 6th pipe
+                if (count == 6 && start <= data.length()) {
+                    parts[6] = data.substring(start);
+                }
 
-                if (parts[0] != null && parts[0].length() > 0) tfNick.setString(parts[0]);
-                if (parts[1] != null && parts[1].length() > 0) tfChannel.setString(parts[1]);
-                if (parts[2] != null && parts[2].length() > 0) tfWifi.setString(parts[2]);
-                if (parts[3] != null && parts[3].length() > 0) tfServer.setString(parts[3]);
-                if (parts[4] != null && parts[4].length() > 0) tfPort.setString(parts[4]);
-                if (parts[5] != null && parts[5].length() > 0) tfPassword.setString(parts[5]);
+                if (parts[0].length() > 0) tfNick.setString(parts[0]);
+                if (parts[1].length() > 0) tfChannel.setString(parts[1]);
+                if (parts[2].length() > 0) tfWifi.setString(parts[2]);
+                if (parts[3].length() > 0) tfServer.setString(parts[3]);
+                if (parts[4].length() > 0) tfPort.setString(parts[4]);
+                if (parts[5].length() > 0) tfPassword.setString(parts[5]);
+                if (parts[6].length() > 0) tfAltNick.setString(parts[6]);
             }
             rs.closeRecordStore();
         } catch (Exception e) {}
@@ -132,14 +141,16 @@ public class IRCClient implements CommandListener, Runnable {
     // -------------------------
 
     private void buildConnectScreen() {
-        connectForm = new Form("BBIRC");
-        tfNick    = new TextField("Nickname:", "BBUser",  32, TextField.ANY);
-        tfChannel = new TextField("Channel:",  "#libera", 64, TextField.ANY);
-        tfWifi    = new TextField("Force Wi-Fi (Y/N):", "N", 1, TextField.ANY);
-        tfServer  = new TextField("Server:", HOST, 64, TextField.ANY);
-        tfPort    = new TextField("Port:", String.valueOf(PORT), 5, TextField.NUMERIC);
+        connectForm = new Form("BBIRC v" + midlet.getAppProperty("MIDlet-Version"));
+        tfNick     = new TextField("Nickname:", "BBUser",  32, TextField.ANY);
+        tfAltNick  = new TextField("Alt Nick (optional):", "BBUser_", 32, TextField.ANY);
+        tfChannel  = new TextField("Channel:",  "#libera", 64, TextField.ANY);
+        tfWifi     = new TextField("Force Wi-Fi (Y/N):", "N", 1, TextField.ANY);
+        tfServer   = new TextField("Server:", HOST, 64, TextField.ANY);
+        tfPort     = new TextField("Port:", String.valueOf(PORT), 5, TextField.NUMERIC);
         tfPassword = new TextField("NickServ Password:", "", 64, TextField.PASSWORD);
         connectForm.append(tfNick);
+        connectForm.append(tfAltNick);
         connectForm.append(tfChannel);
         connectForm.append(tfWifi);
         connectForm.append(tfServer);
@@ -183,6 +194,7 @@ public class IRCClient implements CommandListener, Runnable {
         }
 
         nick = tfNick.getString().trim();
+        altNick = tfAltNick.getString().trim();
         String channel = tfChannel.getString().trim();
         nsPassword = tfPassword.getString().trim();
 
@@ -394,11 +406,17 @@ public class IRCClient implements CommandListener, Runnable {
             if (colon != -1) {
                 addMessage("", "* Users: " + params.substring(colon + 1), MSG_SYSTEM);
             }
-        } else if (command.equals("433")) {
-            nick = nick + "_";
-            sendRaw("NICK " + nick);
-            if (!registered) sendRaw("USER " + nick + " 0 * :" + nick);
-            addMessage("", "* Nick taken, using: " + nick, MSG_SYSTEM);
+      } else if (command.equals("433")) {
+            if (altNick != null && altNick.length() > 0) {
+                nick = altNick;
+                altNick = "";
+                sendRaw("NICK " + nick);
+                addMessage("", "* Nick taken, using: " + nick, MSG_SYSTEM);
+            } else {
+                nick = nick + "_";
+                sendRaw("NICK " + nick);
+                addMessage("", "* Nick taken, using: " + nick, MSG_SYSTEM);
+            }
         } else if (command.equals("001")) {
             if (!registered) {
                 registered = true;
@@ -504,7 +522,7 @@ public class IRCClient implements CommandListener, Runnable {
 
         else if (d == inputBox) {
             if (c.getCommandType() == Command.OK) {
-                String msg = inputBox.getString().trim();
+                String msg = inputBox.getString().trim().replace('\n', ' ');
                 if (msg.length() > 0) sendMessage(currentChannel, msg);
                 midlet.getDisplay().setCurrent(chatCanvas);
             } else {
