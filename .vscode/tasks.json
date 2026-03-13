@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run in KEmulator",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "C:\\Users\\Aziz\\Desktop\\Files\\kemnnx64.v2.21.3\\kemnnx64\\KEmulator.sh",
+        "${workspaceFolder}\\dist\\BBIRC.jar"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      },
+      "presentation": {
+        "reveal": "never",
+        "panel": "shared"
+      }
+    },
+  ]
+}

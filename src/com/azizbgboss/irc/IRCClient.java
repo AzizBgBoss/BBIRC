@@ -514,6 +514,8 @@ public class IRCClient implements CommandListener, Runnable {
     public void run() {
         StringBuffer lineBuf = new StringBuffer();
         try {
+            // Define timestamps so it makes it repaint every minute to rerender the clock you get me bruv mate?
+            int lastMin = (int)((System.currentTimeMillis() / 60000) % 60);
             while (running) {
                 int b = in.read();
                 if (b == -1) break;
@@ -524,6 +526,12 @@ public class IRCClient implements CommandListener, Runnable {
                     if (line.length() > 0) handleLine(line);
                 } else if (c != '\r') {
                     lineBuf.append(c);
+                }
+                if ((int)((System.currentTimeMillis() / 60000) % 60) != lastMin) {
+                    lastMin = (int)((System.currentTimeMillis() / 60000) % 60);
+                    if (chatCanvas != null) {
+                        chatCanvas.repaint();
+                    }
                 }
             }
         } catch (Exception e) {
@@ -992,12 +1000,17 @@ public class IRCClient implements CommandListener, Runnable {
             int  lineH     = fontSmall.getHeight() + 2;
 
             // Title bar
+
+            long now     = System.currentTimeMillis();
+            int  hours   = (int)((now / 3600000) % 24);
+            int  minutes = (int)((now / 60000)   % 60);
+
             int titleH = fontBold.getHeight() + 6;
             g.setColor(0x1A1A2E);
             g.fillRect(0, 0, W, titleH);
             g.setColor(COLOR_NICK_SELF);
             g.setFont(fontBold);
-            g.drawString(title, W / 2, 3, Graphics.TOP | Graphics.HCENTER);
+            g.drawString(pad(hours) + ":" + pad(minutes) + " - " + title, W / 2, 3, Graphics.TOP | Graphics.HCENTER);
             g.setColor(COLOR_DIVIDER);
             g.drawLine(0, titleH, W, titleH);
 
@@ -1010,8 +1023,8 @@ public class IRCClient implements CommandListener, Runnable {
             g.drawLine(0, hintY, W, hintY);
             g.setColor(COLOR_SYSTEM);
             g.setFont(fontSmall);
-            g.drawString("Press Options to send/leave", W / 2, hintY + 2,
-                Graphics.TOP | Graphics.HCENTER);
+            g.drawString("No notifications", W / 2, hintY + 2,
+                Graphics.TOP | Graphics.HCENTER); // Place holder, gonna change it later to notify about pms
 
             int chatTop  = titleH + 2;
             int chatBot  = hintY - 2;
