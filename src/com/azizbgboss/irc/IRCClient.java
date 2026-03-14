@@ -642,7 +642,7 @@ public class IRCClient implements CommandListener, Runnable {
     }
 
     private void buildUsersList() {
-        usersList = new List(String.valueOf(nicks.size()) + "users in " + currentChannel, List.IMPLICIT);
+        usersList = new List(String.valueOf(nicks.size()) + " users in " + currentChannel, List.IMPLICIT);
         for (int i = 0; i < nicks.size(); i++)
             usersList.append((String) nicks.elementAt(i), null);
         cmdUlMessage = new Command("Message", Command.OK, 1);
@@ -1048,9 +1048,12 @@ public class IRCClient implements CommandListener, Runnable {
                 midlet.getDisplay().setCurrent(mainForm);
             } else if (c == cmdPlDuplicate) {
                 if (idx >= 0) {
-                    String[] p = (String[]) profiles.elementAt(idx);
                     if (profiles.size() < MAX_PROFILES) {
-                        profiles.addElement(p.clone());
+                        String[] orig = (String[]) profiles.elementAt(idx);
+                        String[] copy = new String[orig.length];
+                        for (int i = 0; i < orig.length; i++)
+                            copy[i] = orig[i];
+                        profiles.addElement(copy);
                         saveAllProfiles();
                         buildProfileList();
                         midlet.getDisplay().setCurrent(profileList);
@@ -1185,6 +1188,11 @@ public class IRCClient implements CommandListener, Runnable {
         else if (d == usersList) {
             if (c == cmdUlMessage) {
                 String senderNick = (String) nicks.elementAt(usersList.getSelectedIndex());
+                if (senderNick.length() > 0) {
+                    char first = senderNick.charAt(0);
+                    if (first == '@' || first == '+' || first == '%' || first == '~' || first == '&')
+                        senderNick = senderNick.substring(1);
+                }
                 int tabID = -1;
                 if (senderNick.equals(nick)) {
                     showAlert("Error", "Can't message yourself!", usersList);
