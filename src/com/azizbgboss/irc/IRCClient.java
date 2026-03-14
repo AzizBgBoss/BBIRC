@@ -598,22 +598,31 @@ public class IRCClient implements CommandListener, Runnable {
 
     public void run() {
         while (running) {
-            StringBuffer lineBuf = new StringBuffer();
             try {
-                int lastMin = (int) ((System.currentTimeMillis() / 60000) % 60);
+                int lastMin = -1;
+                byte[] rawBuf = new byte[4096];
+                int rawLen = 0;
                 while (running) {
                     int b = in.read();
                     if (b == -1)
                         break;
-                    char c = (char) b;
-                    if (c == '\n') {
-                        String line = lineBuf.toString().trim();
-                        lineBuf.setLength(0);
+                    if (b == '\n') {
+                        // decode the accumulated bytes as UTF-8
+                        String line = "";
+                        try {
+                            line = new String(rawBuf, 0, rawLen, "UTF-8");
+                        } catch (Exception e) {
+                            line = new String(rawBuf, 0, rawLen);
+                        }
+                        rawLen = 0;
+                        line = line.trim();
                         if (line.length() > 0)
                             handleLine(line);
-                    } else if (c != '\r') {
-                        lineBuf.append(c);
+                    } else if (b != '\r') {
+                        if (rawLen < rawBuf.length)
+                            rawBuf[rawLen++] = (byte) b;
                     }
+                    // clock repaint check stays the same
                     if ((int) ((System.currentTimeMillis() / 60000) % 60) != lastMin) {
                         lastMin = (int) ((System.currentTimeMillis() / 60000) % 60);
                         if (chatCanvas != null)
