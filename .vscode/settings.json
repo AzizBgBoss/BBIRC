@@ -1,0 +1,18 @@
+{
+    "java.errors.incompleteClasspath.severity": "ignore",
+    "java.errors.uncheckedTypeAccess.severity": "ignore",
+    "java.configuration.updateBuildConfiguration": "disabled",
+    "jdk.jdkhome": "C:\\Program Files\\Eclipse Adoptium\\jdk-8.0.482.8-hotspot",
+    "java.jdt.ls.java.home": "C:\\Program Files\\Eclipse Adoptium\\jdk-8.0.482.8-hotspot",
+    "java.configuration.runtimes": [
+        {
+            "name": "JavaSE-1.8",
+            "path": "C:\\Program Files\\Eclipse Adoptium\\jdk-8.0.482.8-hotspot",
+            "default": true
+        }
+    ],
+    "java.project.referencedLibraries": [
+        "${workspaceFolder}/lib/**/*.jar",
+    ],
+    "java.autobuild.enabled": false,
+}

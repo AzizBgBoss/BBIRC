@@ -125,8 +125,15 @@ public class IRCClient implements CommandListener, Runnable {
     private Command cmdSend;
     private Command cmdLeave;
     private Command cmdClear;
+    private Command cmdTabs;
     private Command cmdInputOk;
     private Command cmdInputCancel;
+
+    // --- UI: Tabs ---
+    private List tabsList;
+    private Command cmdtabsBack;
+    private Command cmdtabsOpen;
+    private Command cmdtabsDelete;
 
     // =========================================================
     // Constructor
@@ -608,6 +615,22 @@ public class IRCClient implements CommandListener, Runnable {
         closeIO();
     }
 
+    private void buildPmsList() {
+        tabsList = new List("Tabs", List.IMPLICIT);
+        tabsList.append(currentChannel, null);
+        for (int i = 0; i < privateTabs.size(); i++)
+            tabsList.append((String) privateTabs.elementAt(i), null);
+        cmdtabsOpen = new Command("Open", Command.OK, 1);
+        cmdtabsBack = new Command("Back", Command.BACK, 2);
+        cmdtabsDelete = new Command("Delete", Command.SCREEN, 3);
+
+        tabsList.addCommand(cmdtabsOpen);
+        tabsList.addCommand(cmdtabsBack);
+        tabsList.addCommand(cmdtabsDelete);
+        tabsList.setCommandListener(this);
+        tabsList.setSelectCommand(cmdtabsOpen);
+    }
+
     public boolean contains(Vector v, String s) {
         for (int i = 0; i < v.size(); i++) {
             if (((String) v.elementAt(i)).equals(s))
@@ -890,8 +913,8 @@ public class IRCClient implements CommandListener, Runnable {
         privateTimestamps[ID].addElement(ts);
 
         if (!isChannelTab() && activeTab != null && activeTab.equals(privateTabs.elementAt(ID))) // we are in a private
-                                                                            // conversation, u can repaint
-                                                                            // sire
+                                                                                                 // convo, das diddy
+                                                                                                 // bluden
             midlet.getDisplay().callSerially(new Runnable() {
                 public void run() {
                     if (chatCanvas != null) {
@@ -917,9 +940,11 @@ public class IRCClient implements CommandListener, Runnable {
         cmdSend = new Command("Send", Command.OK, 1);
         cmdLeave = new Command("Leave", Command.EXIT, 2);
         cmdClear = new Command("Clear", Command.SCREEN, 3);
+        cmdTabs = new Command("Tabs", Command.SCREEN, 4);
         chatCanvas.addCommand(cmdSend);
         chatCanvas.addCommand(cmdLeave);
         chatCanvas.addCommand(cmdClear);
+        chatCanvas.addCommand(cmdTabs);
         chatCanvas.setCommandListener(this);
     }
 
@@ -1021,6 +1046,13 @@ public class IRCClient implements CommandListener, Runnable {
                     chatCanvas.resetScroll();
                     chatCanvas.repaint();
                 }
+            } else if (c == cmdTabs) {
+                if (privateTabs.isEmpty())
+                    showAlert("", "No other messages!", chatCanvas);
+                else {
+                    buildPmsList();
+                    midlet.getDisplay().setCurrent(tabsList);
+                }
             }
         }
 
@@ -1042,6 +1074,51 @@ public class IRCClient implements CommandListener, Runnable {
                 }
                 midlet.getDisplay().setCurrent(chatCanvas);
             } else {
+                midlet.getDisplay().setCurrent(chatCanvas);
+            }
+        }
+
+        // --- Tabs ---
+        else if (d == tabsList) {
+            if (c == cmdtabsOpen) {
+                int idx = tabsList.getSelectedIndex();
+                if (idx == 0) {
+                    activeTab = currentChannel;
+                    chatCanvas.setTitle(activeTab);
+                    chatCanvas.resetScroll();
+                    midlet.getDisplay().setCurrent(chatCanvas);
+                } else if (idx >= 1) {
+                    activeTab = (String) privateTabs.elementAt(idx - 1);
+                    chatCanvas.setTitle(activeTab);
+                    chatCanvas.resetScroll();
+                    midlet.getDisplay().setCurrent(chatCanvas);
+                }
+            } else if (c == cmdtabsDelete) {
+                int idx = tabsList.getSelectedIndex();
+                if (idx == 0) {
+                    showAlert("Error!",
+                            "Can't delete connected channel! If you want to quit please open the channel then select Close in options.",
+                            tabsList);
+                } else if (idx >= 1) {
+                    if (privateTabs.elementAt(idx - 1).equals(activeTab)) {
+                        activeTab = currentChannel;
+                        chatCanvas.setTitle(activeTab);
+                        chatCanvas.resetScroll();
+                    }
+                    privateTabs.removeElementAt(idx - 1);
+
+                    // shift privateMessages and privateTimestamps down
+                    for (int i = idx - 1; i < MAX_PRIVATE_TABS - 1; i++) {
+                        privateMessages[i] = privateMessages[i + 1];
+                        privateTimestamps[i] = privateTimestamps[i + 1];
+                    }
+                    privateMessages[MAX_PRIVATE_TABS - 1] = null;
+                    privateTimestamps[MAX_PRIVATE_TABS - 1] = null;
+
+                    buildPmsList();
+                    midlet.getDisplay().setCurrent(tabsList);
+                }
+            } else if (c == cmdtabsBack) {
                 midlet.getDisplay().setCurrent(chatCanvas);
             }
         }
