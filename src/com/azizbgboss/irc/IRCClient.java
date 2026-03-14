@@ -21,7 +21,6 @@ public class IRCClient implements CommandListener, Runnable {
     private static final int COLOR_BG = 0x0F0F0F;
     private static final int COLOR_TEXT = 0xE0E0E0;
     private static final int COLOR_NICK_SELF = 0x57A0D3;
-    private static final int COLOR_NICK_OTHER = 0x57D387;
     private static final int COLOR_SYSTEM = 0x888888;
     private static final int COLOR_INPUT_BG = 0x1E1E1E;
     private static final int COLOR_DIVIDER = 0x333333;
@@ -87,6 +86,8 @@ public class IRCClient implements CommandListener, Runnable {
 
     private String notificationMsg = null;
 
+    private Vector nicks = null;
+
     // --- UI: MIDlet ---
     private IRCMidlet midlet;
 
@@ -101,6 +102,7 @@ public class IRCClient implements CommandListener, Runnable {
     private List profileList;
     private Command cmdPlNew;
     private Command cmdPlEdit;
+    private Command cmdPlDuplicate;
     private Command cmdPlDelete;
     private Command cmdPlSelect;
     private Command cmdPlBack;
@@ -126,6 +128,7 @@ public class IRCClient implements CommandListener, Runnable {
     private Command cmdLeave;
     private Command cmdClear;
     private Command cmdTabs;
+    private Command cmdUsers;
     private Command cmdInputOk;
     private Command cmdInputCancel;
 
@@ -134,6 +137,11 @@ public class IRCClient implements CommandListener, Runnable {
     private Command cmdtabsBack;
     private Command cmdtabsOpen;
     private Command cmdtabsDelete;
+
+    // --- UI: Users ---
+    private List usersList;
+    private Command cmdUlMessage;
+    private Command cmdUlBack;
 
     // =========================================================
     // Constructor
@@ -317,12 +325,14 @@ public class IRCClient implements CommandListener, Runnable {
         cmdPlEdit = new Command("Edit", Command.SCREEN, 3);
         cmdPlDelete = new Command("Delete", Command.SCREEN, 4);
         cmdPlBack = new Command("Back", Command.BACK, 5);
+        cmdPlDuplicate = new Command("Duplicate", Command.SCREEN, 6);
 
         profileList.addCommand(cmdPlSelect);
         profileList.addCommand(cmdPlNew);
         profileList.addCommand(cmdPlEdit);
         profileList.addCommand(cmdPlDelete);
         profileList.addCommand(cmdPlBack);
+        profileList.addCommand(cmdPlDuplicate);
         profileList.setCommandListener(this);
         // also fire SELECT command on implicit list tap
         profileList.setSelectCommand(cmdPlSelect);
@@ -631,6 +641,19 @@ public class IRCClient implements CommandListener, Runnable {
         tabsList.setSelectCommand(cmdtabsOpen);
     }
 
+    private void buildUsersList() {
+        usersList = new List(String.valueOf(nicks.size()) + "users in " + currentChannel, List.IMPLICIT);
+        for (int i = 0; i < nicks.size(); i++)
+            usersList.append((String) nicks.elementAt(i), null);
+        cmdUlMessage = new Command("Message", Command.OK, 1);
+        cmdUlBack = new Command("Back", Command.BACK, 2);
+
+        usersList.addCommand(cmdUlMessage);
+        usersList.addCommand(cmdUlBack);
+        usersList.setCommandListener(this);
+        usersList.setSelectCommand(cmdUlMessage);
+    }
+
     public boolean contains(Vector v, String s) {
         for (int i = 0; i < v.size(); i++) {
             if (((String) v.elementAt(i)).equals(s))
@@ -722,7 +745,21 @@ public class IRCClient implements CommandListener, Runnable {
                 }
             }
         } else if (command.equals("JOIN")) {
-            if (!senderNick.equals(nick)) {
+            if (senderNick.equals(nick)) {
+                // server confirms the real channel name
+                int colon = params.indexOf(':');
+                String confirmedChannel = colon != -1 ? params.substring(colon + 1).trim() : params.trim();
+                if (confirmedChannel.length() > 0) {
+                    currentChannel = confirmedChannel;
+                    activeTab = confirmedChannel;
+                    midlet.getDisplay().callSerially(new Runnable() {
+                        public void run() {
+                            chatCanvas.setTitle(currentChannel);
+                            chatCanvas.repaint();
+                        }
+                    });
+                }
+            } else {
                 addMessage("", "* " + senderNick + " joined", MSG_SYSTEM);
             }
         } else if (command.equals("PART")) {
@@ -753,7 +790,7 @@ public class IRCClient implements CommandListener, Runnable {
             if (names.length() == 0)
                 return;
 
-            Vector nicks = new Vector();
+            nicks = new Vector();
             int s = 0;
             for (int i = 0; i <= names.length(); i++) {
                 if (i == names.length() || names.charAt(i) == ' ') {
@@ -941,10 +978,12 @@ public class IRCClient implements CommandListener, Runnable {
         cmdLeave = new Command("Leave", Command.EXIT, 2);
         cmdClear = new Command("Clear", Command.SCREEN, 3);
         cmdTabs = new Command("Tabs", Command.SCREEN, 4);
+        cmdUsers = new Command("Users", Command.SCREEN, 5);
         chatCanvas.addCommand(cmdSend);
         chatCanvas.addCommand(cmdLeave);
         chatCanvas.addCommand(cmdClear);
         chatCanvas.addCommand(cmdTabs);
+        chatCanvas.addCommand(cmdUsers);
         chatCanvas.setCommandListener(this);
     }
 
@@ -1007,6 +1046,18 @@ public class IRCClient implements CommandListener, Runnable {
             } else if (c == cmdPlBack) {
                 refreshMainForm();
                 midlet.getDisplay().setCurrent(mainForm);
+            } else if (c == cmdPlDuplicate) {
+                if (idx >= 0) {
+                    String[] p = (String[]) profiles.elementAt(idx);
+                    if (profiles.size() < MAX_PROFILES) {
+                        profiles.addElement(p.clone());
+                        saveAllProfiles();
+                        buildProfileList();
+                        midlet.getDisplay().setCurrent(profileList);
+                    } else {
+                        showAlert("Limit", "Max " + MAX_PROFILES + " profiles.", profileList);
+                    }
+                }
             }
         }
 
@@ -1052,6 +1103,13 @@ public class IRCClient implements CommandListener, Runnable {
                 else {
                     buildPmsList();
                     midlet.getDisplay().setCurrent(tabsList);
+                }
+            } else if (c == cmdUsers) {
+                if (nicks == null) {
+                    showAlert("", "Please wait until you are connected to the server.", chatCanvas);
+                } else {
+                    buildUsersList();
+                    midlet.getDisplay().setCurrent(usersList);
                 }
             }
         }
@@ -1119,6 +1177,42 @@ public class IRCClient implements CommandListener, Runnable {
                     midlet.getDisplay().setCurrent(tabsList);
                 }
             } else if (c == cmdtabsBack) {
+                midlet.getDisplay().setCurrent(chatCanvas);
+            }
+        }
+
+        // --- Users ---
+        else if (d == usersList) {
+            if (c == cmdUlMessage) {
+                String senderNick = (String) nicks.elementAt(usersList.getSelectedIndex());
+                int tabID = -1;
+                if (senderNick.equals(nick)) {
+                    showAlert("Error", "Can't message yourself!", usersList);
+                } else {
+                    if (contains(privateTabs, senderNick)) {
+                        tabID = indexOf(privateTabs, senderNick);
+                    } else {
+                        if (privateTabs.size() < MAX_PRIVATE_TABS) {
+                            privateTabs.addElement(senderNick);
+                        } else {
+                            for (int i = 0; i < privateTabs.size() - 1; i++) {
+                                if (!privateTabs.elementAt(i).equals(senderNick)) {
+                                    privateTabs.removeElementAt(i);
+                                    break;
+                                }
+                            }
+                            privateTabs.addElement(senderNick);
+                        }
+                        tabID = privateTabs.size() - 1;
+                        privateMessages[tabID] = new Vector();
+                        privateTimestamps[tabID] = new Vector();
+                    }
+                    activeTab = senderNick;
+                    chatCanvas.setTitle(activeTab);
+                    chatCanvas.resetScroll();
+                    midlet.getDisplay().setCurrent(chatCanvas);
+                }
+            } else if (c == cmdUlBack) {
                 midlet.getDisplay().setCurrent(chatCanvas);
             }
         }
@@ -1422,9 +1516,7 @@ public class IRCClient implements CommandListener, Runnable {
                         }
                     } else {
                         // measure nick prefix to know remaining width for first line
-                        int nickColor = type == MSG_SELF
-                                ? COLOR_NICK_SELF
-                                : (Math.abs(msgNick.hashCode()) % 0xAAAAAA + 0x555555);
+                        int nickColor = Math.abs(msgNick.hashCode()) % 0xAAAAAA + 0x555555;
                         String nickPrefix = msgNick + ": ";
                         int nickW = fontBold.stringWidth(nickPrefix);
                         int firstLineW = W - tsW - nickW - 2;
