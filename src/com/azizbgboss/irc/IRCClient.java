@@ -124,13 +124,21 @@ public class IRCClient implements CommandListener, Runnable {
     // --- UI: Chat ---
     private ChatCanvas chatCanvas;
     private TextBox inputBox;
+    private TextBox msgTargetBox;
+    private TextBox nickBox;
     private Command cmdSend;
     private Command cmdLeave;
     private Command cmdClear;
     private Command cmdTabs;
     private Command cmdUsers;
+    private Command cmdNick;
+    private Command cmdNewMessage;
     private Command cmdInputOk;
     private Command cmdInputCancel;
+    private Command cmdMsgTargetOk;
+    private Command cmdMsgTargetCancel;
+    private Command cmdNickOk;
+    private Command cmdNickCancel;
 
     // --- UI: Tabs ---
     private List tabsList;
@@ -589,36 +597,73 @@ public class IRCClient implements CommandListener, Runnable {
     // =========================================================
 
     public void run() {
-        StringBuffer lineBuf = new StringBuffer();
-        try {
-            // Define timestamps so it makes it repaint every minute to rerender the clock
-            // you get me bruv mate?
-            int lastMin = (int) ((System.currentTimeMillis() / 60000) % 60);
-            while (running) {
-                int b = in.read();
-                if (b == -1)
-                    break;
-                char c = (char) b;
-                if (c == '\n') {
-                    String line = lineBuf.toString().trim();
-                    lineBuf.setLength(0);
-                    if (line.length() > 0)
-                        handleLine(line);
-                } else if (c != '\r') {
-                    lineBuf.append(c);
-                }
-                if ((int) ((System.currentTimeMillis() / 60000) % 60) != lastMin) {
-                    lastMin = (int) ((System.currentTimeMillis() / 60000) % 60);
-                    if (chatCanvas != null) {
-                        chatCanvas.repaint();
+        while (running) {
+            StringBuffer lineBuf = new StringBuffer();
+            try {
+                int lastMin = (int) ((System.currentTimeMillis() / 60000) % 60);
+                while (running) {
+                    int b = in.read();
+                    if (b == -1)
+                        break;
+                    char c = (char) b;
+                    if (c == '\n') {
+                        String line = lineBuf.toString().trim();
+                        lineBuf.setLength(0);
+                        if (line.length() > 0)
+                            handleLine(line);
+                    } else if (c != '\r') {
+                        lineBuf.append(c);
+                    }
+                    if ((int) ((System.currentTimeMillis() / 60000) % 60) != lastMin) {
+                        lastMin = (int) ((System.currentTimeMillis() / 60000) % 60);
+                        if (chatCanvas != null)
+                            chatCanvas.repaint();
                     }
                 }
-            }
-        } catch (Exception e) {
-            if (running) {
-                showAlert("Disconnected", "Connection lost: " + e.getMessage(), mainForm);
+            } catch (Exception e) {
+                if (!running)
+                    break; // intentional disconnect, stop
+                // network error — attempt reconnect
+                addMessage("", "* Connection lost, reconnecting...", MSG_SYSTEM);
+                closeIO();
+                connected = false;
+                registered = false;
+
+                // wait 3 seconds
+                try {
+                    Thread.sleep(3000);
+                } catch (Exception ignored) {
+                }
+
+                if (!running)
+                    break; // user disconnected while waiting
+
+                // attempt to reopen socket
+                try {
+                    socket = (SocketConnection) Connector.open(
+                            "socket://" + server + ":" + port +
+                                    (forceWifi ? ";interface=wifi" : ""));
+                    in = socket.openInputStream();
+                    out = socket.openOutputStream();
+
+                    connected = true;
+                    registered = false;
+
+                    sendRaw("NICK " + nick);
+                    sendRaw("USER " + nick + " 0 * :" + nick);
+                    addMessage("", "* Reconnected, rejoining...", MSG_SYSTEM);
+                    // 001 handler will call joinChannel when registered
+                    pendingChannel = currentChannel;
+
+                } catch (Exception re) {
+                    addMessage("", "* Reconnect failed: " + re.getMessage(), MSG_SYSTEM);
+                    running = false;
+                    connected = false;
+                    break;
+                }
             }
         }
+
         running = false;
         connected = false;
         registered = false;
@@ -760,20 +805,33 @@ public class IRCClient implements CommandListener, Runnable {
                     });
                 }
             } else {
+                nicks.addElement(senderNick);
                 addMessage("", "* " + senderNick + " joined", MSG_SYSTEM);
             }
         } else if (command.equals("PART")) {
+            if (nicks != null && nicks.contains(senderNick)) // Too safe than sorry
+                nicks.removeElement(senderNick);
             addMessage("", "* " + senderNick + " left", MSG_SYSTEM);
         } else if (command.equals("QUIT")) {
+            if (nicks != null && nicks.contains(senderNick)) // Too safe than sorry
+                nicks.removeElement(senderNick);
             addMessage("", "* " + senderNick + " quit", MSG_SYSTEM);
         } else if (command.equals("NICK")) {
             if (senderNick.equals(nick)) {
                 int c2 = params.indexOf(':');
                 nick = c2 != -1 ? params.substring(c2 + 1) : params;
+                if (nicks != null && nicks.contains(senderNick)) {
+                    nicks.removeElement(senderNick);
+                    nicks.addElement(nick);
+                }
                 addMessage("", "* You are now known as " + nick, MSG_SYSTEM);
             } else {
                 int c2 = params.indexOf(':');
                 String newNick = c2 != -1 ? params.substring(c2 + 1) : params;
+                if (nicks != null && nicks.contains(senderNick)) {
+                    nicks.removeElement(senderNick);
+                    nicks.addElement(newNick);
+                }
                 addMessage("", "* " + senderNick + " is now " + newNick, MSG_SYSTEM);
             }
         } else if (command.equals("353")) {
@@ -881,10 +939,7 @@ public class IRCClient implements CommandListener, Runnable {
 
     private void handleIOError(Exception e) {
         connected = false;
-        running = false;
-        registered = false;
         closeIO();
-        showAlert("Error", "Network error: " + e.getMessage(), mainForm);
     }
 
     // =========================================================
@@ -979,11 +1034,15 @@ public class IRCClient implements CommandListener, Runnable {
         cmdClear = new Command("Clear", Command.SCREEN, 3);
         cmdTabs = new Command("Tabs", Command.SCREEN, 4);
         cmdUsers = new Command("Users", Command.SCREEN, 5);
+        cmdNewMessage = new Command("New Message", Command.SCREEN, 6);
+        cmdNick = new Command("Change Nick", Command.SCREEN, 7);
         chatCanvas.addCommand(cmdSend);
         chatCanvas.addCommand(cmdLeave);
         chatCanvas.addCommand(cmdClear);
         chatCanvas.addCommand(cmdTabs);
         chatCanvas.addCommand(cmdUsers);
+        chatCanvas.addCommand(cmdNewMessage);
+        chatCanvas.addCommand(cmdNick);
         chatCanvas.setCommandListener(this);
     }
 
@@ -1114,6 +1173,93 @@ public class IRCClient implements CommandListener, Runnable {
                     buildUsersList();
                     midlet.getDisplay().setCurrent(usersList);
                 }
+            } else if (c == cmdNewMessage) {
+                if (!connected) {
+                    showAlert("", "Please wait until you are connected to the server.", chatCanvas);
+                } else {
+                    msgTargetBox = new TextBox("Private message to", "", 32, TextField.ANY);
+                    cmdMsgTargetOk = new Command("PM", Command.OK, 1);
+                    cmdMsgTargetCancel = new Command("Cancel", Command.BACK, 2);
+
+                    msgTargetBox.addCommand(cmdMsgTargetOk);
+                    msgTargetBox.addCommand(cmdMsgTargetCancel);
+                    msgTargetBox.setCommandListener(this);
+                    midlet.getDisplay().setCurrent(msgTargetBox);
+                }
+            } else if (c == cmdNick) {
+                if (!connected) {
+                    showAlert("", "Please wait until you are connected to the server.", chatCanvas);
+                } else {
+                    nickBox = new TextBox("Change nickname", nick, 32, TextField.ANY);
+                    cmdNickOk = new Command("Change", Command.OK, 1);
+                    cmdNickCancel = new Command("Cancel", Command.BACK, 2);
+
+                    nickBox.addCommand(cmdNickOk);
+                    nickBox.addCommand(cmdNickCancel);
+                    nickBox.setCommandListener(this);
+                    midlet.getDisplay().setCurrent(nickBox);
+                }
+            }
+        }
+
+        // --- Change Nick ---
+        else if (d == nickBox) {
+            if (c.getCommandType() == Command.OK) {
+                String newNick = nickBox.getString().trim();
+                if (newNick.length() > 0) {
+                    if (!connected) {
+                        showAlert("", "Please wait until you are connected to the server.", chatCanvas);
+                    } else {
+                        if (!newNick.equals(nick)) {
+                            sendRaw("NICK " + newNick);
+                            midlet.getDisplay().setCurrent(chatCanvas);
+                        } else {
+                            showAlert("", "Please set a different nickname.", nickBox);
+                        }
+                    }
+                }
+            } else {
+                midlet.getDisplay().setCurrent(chatCanvas);
+            }
+        }
+
+        // --- PM target ---
+        else if (d == msgTargetBox) {
+            if (c.getCommandType() == Command.OK) {
+                String target = msgTargetBox.getString().trim().replace('\n', '_').replace(' ', '_');
+                if (target.length() > 0) {
+                    if (target.equals(nick)) {
+                        showAlert("Error", "Can't message yourself!", msgTargetBox);
+                    } else {
+                        int tabID = -1;
+                        if (contains(privateTabs, target)) {
+                            tabID = indexOf(privateTabs, target);
+                        } else {
+                            if (privateTabs.size() < MAX_PRIVATE_TABS) {
+                                privateTabs.addElement(target);
+                            } else {
+                                for (int i = 0; i < privateTabs.size() - 1; i++) {
+                                    if (!privateTabs.elementAt(i).equals(target)) {
+                                        privateTabs.removeElementAt(i);
+                                        break;
+                                    }
+                                }
+                                privateTabs.addElement(target);
+                            }
+                            tabID = privateTabs.size() - 1;
+                            privateMessages[tabID] = new Vector();
+                            privateTimestamps[tabID] = new Vector();
+                        }
+                        activeTab = target;
+                        chatCanvas.setTitle(activeTab);
+                        chatCanvas.resetScroll();
+                        midlet.getDisplay().setCurrent(chatCanvas);
+                    }
+                } else {
+                    midlet.getDisplay().setCurrent(chatCanvas);
+                }
+            } else {
+                midlet.getDisplay().setCurrent(chatCanvas);
             }
         }
 
