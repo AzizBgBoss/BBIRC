@@ -624,6 +624,10 @@ public class IRCClient implements CommandListener, Runnable {
         return -1;
     }
 
+    private boolean isChannelTab() {
+        return activeTab != null && activeTab.startsWith("#");
+    }
+
     // =========================================================
     // IRC Protocol
     // =========================================================
@@ -669,19 +673,19 @@ public class IRCClient implements CommandListener, Runnable {
                     addMessage(senderNick, message, MSG_OTHER);
                 } else if (!target.startsWith("#")) { // looks like we are getting a private message!
                     int tabID = -1;
-                    if (contains(privateTabs, target)) {
-                        tabID = indexOf(privateTabs, target);
+                    if (contains(privateTabs, senderNick)) {
+                        tabID = indexOf(privateTabs, senderNick);
                     } else {
                         if (privateTabs.size() < MAX_PRIVATE_TABS) {
-                            privateTabs.addElement(target);
+                            privateTabs.addElement(senderNick);
                         } else {
                             for (int i = 0; i < privateTabs.size() - 1; i++) {
-                                if (!privateTabs.elementAt(i).equals(target)) {
+                                if (!privateTabs.elementAt(i).equals(senderNick)) {
                                     privateTabs.removeElementAt(i);
                                     break;
                                 }
                             }
-                            privateTabs.addElement(target);
+                            privateTabs.addElement(senderNick);
                         }
                         tabID = privateTabs.size() - 1;
                         privateMessages[tabID] = new Vector();
@@ -841,7 +845,7 @@ public class IRCClient implements CommandListener, Runnable {
         }
 
         if (type == MSG_OTHER) {
-            if (activeTab.equals(currentChannel))
+            if (activeTab != null && activeTab.equals(currentChannel))
                 notification(100, null);
             else
                 notification(200, "New message in " + currentChannel);
@@ -850,7 +854,7 @@ public class IRCClient implements CommandListener, Runnable {
         messages.addElement(new String[] { msgNick, text, String.valueOf(type) });
         timestamps.addElement(ts);
 
-        if (activeTab.startsWith("#")) // we are in a channel, u can repaint
+        if (isChannelTab()) // we are in a channel, u can repaint
             midlet.getDisplay().callSerially(new Runnable() {
                 public void run() {
                     if (chatCanvas != null) {
@@ -876,18 +880,18 @@ public class IRCClient implements CommandListener, Runnable {
         }
 
         if (type == MSG_OTHER) {
-            if (activeTab.equals(privateTabs.elementAt(ID)))
+            if (activeTab != null && activeTab.equals(privateTabs.elementAt(ID)))
                 notification(100, null);
             else
-                notification(200, "New message from " + privateTabs.elementAt(ID));
+                notification(200, "New private message from " + senderNick);
         }
 
         privateMessages[ID].addElement(new String[] { senderNick, text, String.valueOf(type) });
         privateTimestamps[ID].addElement(ts);
 
-        if (!activeTab.startsWith("#") && activeTab.equals(privateTabs.elementAt(ID))) // we are in a private
-                                                                                       // conversation, u can repaint
-                                                                                       // sire
+        if (!isChannelTab() && activeTab != null && activeTab.equals(privateTabs.elementAt(ID))) // we are in a private
+                                                                            // conversation, u can repaint
+                                                                            // sire
             midlet.getDisplay().callSerially(new Runnable() {
                 public void run() {
                     if (chatCanvas != null) {
@@ -1214,7 +1218,7 @@ public class IRCClient implements CommandListener, Runnable {
             if (activeTabInCanvas == null || !activeTabInCanvas.equals(activeTab)) {
                 activeTabInCanvas = activeTab;
                 cachedMsgCount = -1; // invalidate cache
-                if (activeTab.startsWith("#")) {
+                if (isChannelTab()) {
                     synchronized (IRCClient.this) {
                         chatMessages = messages;
                         chatTimestamps = timestamps;
