@@ -18,12 +18,12 @@ public class IRCClient implements CommandListener, Runnable {
     private static final int MAX_PROFILES = 5;
 
     // --- Colors ---
-    private static final int COLOR_BG = 0xFFFFFF; 
+    private static final int COLOR_BG = 0xFFFFFF;
     private static final int COLOR_TEXT = 0x222222;
-    private static final int COLOR_NICK_SELF = 0x0078D4; 
+    private static final int COLOR_NICK_SELF = 0x0078D4;
     private static final int COLOR_SYSTEM = 0x888888;
-    private static final int COLOR_INPUT_BG = 0xF4F4F4; 
-    private static final int COLOR_DIVIDER = 0xCCCCCC; 
+    private static final int COLOR_INPUT_BG = 0xF4F4F4;
+    private static final int COLOR_DIVIDER = 0xCCCCCC;
     private static final int COLOR_TIMESTAMP = 0xAAAAAA;
 
     // --- Message types ---
@@ -1485,44 +1485,40 @@ public class IRCClient implements CommandListener, Runnable {
         // --- Incremental append ---
 
         private void appendToCache(Font fontSmall, Font fontBold, int W) {
-            int msgCount = chatMessages.size();
-            int oldCount = cachedMsgLines.length;
+            int msgCount, oldCount;
+            synchronized (IRCClient.this) {
+                msgCount = chatMessages.size();
+                oldCount = cachedMsgLines.length;
 
-            if (oldCount == 0 || wrappedCache == null || W != cachedWidth) {
-                rebuildCache(fontSmall, fontBold, W);
-                return;
-            }
+                if (oldCount == 0 || wrappedCache == null || W != cachedWidth) {
+                    rebuildCache(fontSmall, fontBold, W);
+                    return;
+                }
 
-            if (msgCount == oldCount) {
-                // MAX_MESSAGES hit: shift left
-                int[] newLines = new int[oldCount];
-                String[][] newWrapped = new String[oldCount][];
-                System.arraycopy(cachedMsgLines, 1, newLines, 0, oldCount - 1);
-                for (int i = 0; i < oldCount - 1; i++)
-                    newWrapped[i] = wrappedCache[i + 1];
-                cachedMsgLines = newLines;
-                wrappedCache = newWrapped;
-                synchronized (IRCClient.this) {
-                    // entry 0 may no longer be grouped since it lost its predecessor
+                if (msgCount == oldCount) {
+                    // MAX_MESSAGES hit: shift left
+                    int[] newLines = new int[oldCount];
+                    String[][] newWrapped = new String[oldCount][];
+                    System.arraycopy(cachedMsgLines, 1, newLines, 0, oldCount - 1);
+                    for (int i = 0; i < oldCount - 1; i++)
+                        newWrapped[i] = wrappedCache[i + 1];
+                    cachedMsgLines = newLines;
+                    wrappedCache = newWrapped;
                     buildCacheEntry(fontSmall, fontBold, W, 0);
-                    // build the new last entry
                     buildCacheEntry(fontSmall, fontBold, W, oldCount - 1);
-                }
-            } else if (msgCount == oldCount + 1) {
-                // normal: grow by 1
-                int[] newLines = new int[msgCount];
-                String[][] newWrapped = new String[msgCount][];
-                System.arraycopy(cachedMsgLines, 0, newLines, 0, oldCount);
-                for (int i = 0; i < oldCount; i++)
-                    newWrapped[i] = wrappedCache[i];
-                cachedMsgLines = newLines;
-                wrappedCache = newWrapped;
-                synchronized (IRCClient.this) {
+                } else if (msgCount == oldCount + 1) {
+                    int[] newLines = new int[msgCount];
+                    String[][] newWrapped = new String[msgCount][];
+                    System.arraycopy(cachedMsgLines, 0, newLines, 0, oldCount);
+                    for (int i = 0; i < oldCount; i++)
+                        newWrapped[i] = wrappedCache[i];
+                    cachedMsgLines = newLines;
+                    wrappedCache = newWrapped;
                     buildCacheEntry(fontSmall, fontBold, W, oldCount);
+                } else {
+                    rebuildCache(fontSmall, fontBold, W);
+                    return;
                 }
-            } else {
-                rebuildCache(fontSmall, fontBold, W);
-                return;
             }
 
             cachedMsgCount = msgCount;
