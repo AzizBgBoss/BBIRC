@@ -38,6 +38,7 @@ public class IRCClient implements CommandListener, Runnable {
     private String nsPassword = "";
     private int port = DEFAULT_PORT;
     private boolean forceWifi = false;
+    private boolean deviceSide = false;
     private String currentChannel = "";
     private boolean connected = false;
     private boolean running = false;
@@ -70,15 +71,16 @@ public class IRCClient implements CommandListener, Runnable {
     private Thread readThread;
 
     // --- Profiles (in-memory) ---
-    // Each element is a String[8]:
+    // Each element is a String[9]:
     // [0] profileName
     // [1] nick
     // [2] altNick
     // [3] channel
     // [4] wifi (Y/N)
-    // [5] server
-    // [6] port
-    // [7] password
+    // [5] deviceSide (Y/N)
+    // [6] server
+    // [7] port
+    // [8] password
 
     private Vector profiles = new Vector(); // Vector of String[]
     private int activeProfile = 0; // index into profiles
@@ -114,6 +116,7 @@ public class IRCClient implements CommandListener, Runnable {
     private TextField tfAltNick;
     private TextField tfChannel;
     private TextField tfWifi;
+    private TextField tfDeviceSide;
     private TextField tfServer;
     private TextField tfPort;
     private TextField tfPassword;
@@ -213,7 +216,7 @@ public class IRCClient implements CommandListener, Runnable {
         if (profiles.isEmpty()) {
             String[] def = new String[] {
                     "Default", "BBUser", "BBUser_",
-                    "#libera", "N", DEFAULT_HOST,
+                    "#libera", "N", "N", DEFAULT_HOST,
                     String.valueOf(DEFAULT_PORT), ""
             };
             profiles.addElement(def);
@@ -223,30 +226,30 @@ public class IRCClient implements CommandListener, Runnable {
     }
 
     private String[] parseProfile(String data) {
-        String[] p = new String[8];
+        String[] p = new String[9];
         for (int i = 0; i < p.length; i++)
             p[i] = "";
         int count = 0, start = 0;
-        for (int i = 0; i <= data.length() && count < 7; i++) {
+        for (int i = 0; i <= data.length() && count < 8; i++) {
             if (i == data.length() || data.charAt(i) == '|') {
                 p[count++] = data.substring(start, i);
                 start = i + 1;
             }
         }
         // last field (password) = remainder
-        if (count == 7 && start <= data.length()) {
-            p[7] = data.substring(start);
+        if (count == 8 && start <= data.length()) {
+            p[8] = data.substring(start);
         }
         return p;
     }
 
     private String profileToString(String[] p) {
         StringBuffer sb = new StringBuffer();
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 8; i++) {
             sb.append(p[i] == null ? "" : p[i]);
             sb.append('|');
         }
-        sb.append(p[7] == null ? "" : p[7]);
+        sb.append(p[8] == null ? "" : p[8]);
         return sb.toString();
     }
 
@@ -357,7 +360,7 @@ public class IRCClient implements CommandListener, Runnable {
 
         if (index == -1) {
             // New profile — blank defaults
-            p = new String[] { "", "BBUser", "BBUser_", "#libera", "N",
+            p = new String[] { "", "BBUser", "BBUser_", "#libera", "N", "N",
                     DEFAULT_HOST, String.valueOf(DEFAULT_PORT), "" };
             title = "New Profile";
         } else {
@@ -370,16 +373,18 @@ public class IRCClient implements CommandListener, Runnable {
         tfNick = new TextField("Nickname:", p[1], 32, TextField.ANY);
         tfAltNick = new TextField("Alt Nick:", p[2], 32, TextField.ANY);
         tfChannel = new TextField("Channel:", p[3], 64, TextField.ANY);
-        tfWifi = new TextField("Force Wi-Fi + Device Side (for BB phones) (Y/N):", p[4], 1, TextField.ANY);
-        tfServer = new TextField("Server:", p[5], 64, TextField.ANY);
-        tfPort = new TextField("Port:", p[6], 5, TextField.NUMERIC);
-        tfPassword = new TextField("NickServ Pass:", p[7], 64, TextField.PASSWORD);
+        tfWifi = new TextField("Force Wi-Fi (BB) (Y/N):", p[4], 1, TextField.ANY);
+        tfDeviceSide = new TextField("Device Side (BB) (Y/N):", p[5], 1, TextField.ANY);
+        tfServer = new TextField("Server:", p[6], 64, TextField.ANY);
+        tfPort = new TextField("Port:", p[7], 5, TextField.NUMERIC);
+        tfPassword = new TextField("NickServ Pass:", p[8], 64, TextField.PASSWORD);
 
         editForm.append(tfProfileName);
         editForm.append(tfNick);
         editForm.append(tfAltNick);
         editForm.append(tfChannel);
         editForm.append(tfWifi);
+        editForm.append(tfDeviceSide);
         editForm.append(tfServer);
         editForm.append(tfPort);
         editForm.append(tfPassword);
@@ -406,16 +411,17 @@ public class IRCClient implements CommandListener, Runnable {
                 tfAltNick.getString().trim(),
                 ch,
                 tfWifi.getString().trim().toUpperCase(),
+                tfDeviceSide.getString().trim().toUpperCase(),
                 tfServer.getString().trim(),
                 tfPort.getString().trim(),
                 tfPassword.getString().trim()
         };
         if (p[1].length() == 0)
             p[1] = "BBUser";
-        if (p[5].length() == 0)
-            p[5] = DEFAULT_HOST;
         if (p[6].length() == 0)
-            p[6] = String.valueOf(DEFAULT_PORT);
+            p[6] = DEFAULT_HOST;
+        if (p[7].length() == 0)
+            p[7] = String.valueOf(DEFAULT_PORT);
 
         if (editingIndex == -1) {
             profiles.addElement(p);
@@ -448,7 +454,7 @@ public class IRCClient implements CommandListener, Runnable {
         nick = p[1].trim();
         altNick = p[2].trim();
         String channel = p[3].trim();
-        nsPassword = p[7].trim();
+        nsPassword = p[8].trim();
 
         if (nick.length() == 0) {
             showAlert("Error", "Profile has no nickname.", mainForm);
@@ -461,12 +467,12 @@ public class IRCClient implements CommandListener, Runnable {
         if (!channel.startsWith("#"))
             channel = "#" + channel;
 
-        server = p[5].trim();
+        server = p[6].trim();
         if (server.length() == 0)
             server = DEFAULT_HOST;
 
         try {
-            port = Integer.parseInt(p[6].trim());
+            port = Integer.parseInt(p[7].trim());
         } catch (Exception e) {
             port = DEFAULT_PORT;
         }
@@ -474,6 +480,7 @@ public class IRCClient implements CommandListener, Runnable {
             port = DEFAULT_PORT;
 
         forceWifi = "Y".equals(p[4].trim().toUpperCase());
+        deviceSide = "Y".equals(p[5].trim().toUpperCase());
 
         nicks = new Vector();
 
@@ -491,7 +498,8 @@ public class IRCClient implements CommandListener, Runnable {
                 try {
                     socket = (SocketConnection) Connector.open(
                             "socket://" + server + ":" + port +
-                                    (forceWifi ? ";interface=wifi;deviceside=true" : ""));
+                                    (forceWifi ? ";interface=wifi" : "") +
+                                    (deviceSide ? ";deviceside=true" : ""));
                     in = socket.openInputStream();
                     out = socket.openOutputStream();
 
@@ -653,7 +661,8 @@ public class IRCClient implements CommandListener, Runnable {
                 try {
                     socket = (SocketConnection) Connector.open(
                             "socket://" + server + ":" + port +
-                                    (forceWifi ? ";interface=wifi" : ""));
+                                    (forceWifi ? ";interface=wifi" : "") +
+                                    (deviceSide ? ";deviceside=true" : ""));
                     in = socket.openInputStream();
                     out = socket.openOutputStream();
 
