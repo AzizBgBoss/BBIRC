@@ -475,6 +475,8 @@ public class IRCClient implements CommandListener, Runnable {
 
         forceWifi = "Y".equals(p[4].trim().toUpperCase());
 
+        nicks = new Vector();
+
         buildChatCanvas(channel);
         activeTab = channel;
         chatCanvas.setTitle("Connecting...");
@@ -1492,7 +1494,7 @@ public class IRCClient implements CommandListener, Runnable {
             }
 
             if (msgCount == oldCount) {
-                // MAX_MESSAGES hit: one removed from front, one added to back — shift left
+                // MAX_MESSAGES hit: shift left
                 int[] newLines = new int[oldCount];
                 String[][] newWrapped = new String[oldCount][];
                 System.arraycopy(cachedMsgLines, 1, newLines, 0, oldCount - 1);
@@ -1501,6 +1503,9 @@ public class IRCClient implements CommandListener, Runnable {
                 cachedMsgLines = newLines;
                 wrappedCache = newWrapped;
                 synchronized (IRCClient.this) {
+                    // entry 0 may no longer be grouped since it lost its predecessor
+                    buildCacheEntry(fontSmall, fontBold, W, 0);
+                    // build the new last entry
                     buildCacheEntry(fontSmall, fontBold, W, oldCount - 1);
                 }
             } else if (msgCount == oldCount + 1) {
