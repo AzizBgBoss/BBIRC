@@ -18,13 +18,13 @@ public class IRCClient implements CommandListener, Runnable {
     private static final int MAX_PROFILES = 5;
 
     // --- Colors ---
-    private static final int COLOR_BG = 0x0F0F0F;
-    private static final int COLOR_TEXT = 0xE0E0E0;
-    private static final int COLOR_NICK_SELF = 0x57A0D3;
+    private static final int COLOR_BG = 0xFFFFFF; 
+    private static final int COLOR_TEXT = 0x222222;
+    private static final int COLOR_NICK_SELF = 0x0078D4; 
     private static final int COLOR_SYSTEM = 0x888888;
-    private static final int COLOR_INPUT_BG = 0x1E1E1E;
-    private static final int COLOR_DIVIDER = 0x333333;
-    private static final int COLOR_TIMESTAMP = 0x555555;
+    private static final int COLOR_INPUT_BG = 0xF4F4F4; 
+    private static final int COLOR_DIVIDER = 0xCCCCCC; 
+    private static final int COLOR_TIMESTAMP = 0xAAAAAA;
 
     // --- Message types ---
     private static final int MSG_SELF = 0;
@@ -1619,6 +1619,9 @@ public class IRCClient implements CommandListener, Runnable {
                     char last = stripped.charAt(stripped.length() - 1);
                     if (last == ',' || last == ':' || last == '!' || last == '?')
                         stripped = stripped.substring(0, stripped.length() - 1);
+                    char first = stripped.length() > 0 ? stripped.charAt(0) : ' ';
+                    if (first == '@' || first == '+' || first == '%' || first == '~' || first == '&')
+                        stripped = stripped.substring(1);
                 }
 
                 boolean isMyNick = stripped.equals(nick);
@@ -1626,12 +1629,12 @@ public class IRCClient implements CommandListener, Runnable {
 
                 if (isMyNick) {
                     g.setFont(fontBold);
-                    g.setColor(0xFFD700);
+                    g.setColor(0xCC0000);
                     g.drawString(word, xPos, y, Graphics.TOP | Graphics.LEFT);
                     xPos += fontBold.stringWidth(word);
                 } else if (isOtherNick) {
                     g.setFont(fontBold);
-                    g.setColor(Math.abs(stripped.hashCode()) % 0xAAAAAA + 0x555555);
+                    g.setColor(Math.abs(stripped.hashCode()) % 0x999999 + 0x000066);
                     g.drawString(word, xPos, y, Graphics.TOP | Graphics.LEFT);
                     xPos += fontBold.stringWidth(word);
                 } else {
@@ -1812,7 +1815,7 @@ public class IRCClient implements CommandListener, Runnable {
                             y += lineH;
                         }
                     } else {
-                        int nickColor = Math.abs(msgNick.hashCode()) % 0xAAAAAA + 0x555555;
+                        int nickColor = Math.abs(msgNick.hashCode()) % 0x999999 + 0x000066;
                         String nickPrefix = msgNick + ": ";
                         int nickW = fontBold.stringWidth(nickPrefix);
 
