@@ -343,7 +343,7 @@ public class IRCClient implements CommandListener, Runnable {
         profileList.addCommand(cmdPlDuplicate);
         profileList.setCommandListener(this);
         // also fire SELECT command on implicit list tap
-        profileList.setSelectCommand(cmdPlSelect);
+        profileList.setSelectCommand(cmdPlEdit);
     }
 
     // =========================================================
@@ -370,7 +370,7 @@ public class IRCClient implements CommandListener, Runnable {
         tfNick = new TextField("Nickname:", p[1], 32, TextField.ANY);
         tfAltNick = new TextField("Alt Nick:", p[2], 32, TextField.ANY);
         tfChannel = new TextField("Channel:", p[3], 64, TextField.ANY);
-        tfWifi = new TextField("Force Wi-Fi (Y/N):", p[4], 1, TextField.ANY);
+        tfWifi = new TextField("Force Wi-Fi + Device Side (for BB phones) (Y/N):", p[4], 1, TextField.ANY);
         tfServer = new TextField("Server:", p[5], 64, TextField.ANY);
         tfPort = new TextField("Port:", p[6], 5, TextField.NUMERIC);
         tfPassword = new TextField("NickServ Pass:", p[7], 64, TextField.PASSWORD);
@@ -491,7 +491,7 @@ public class IRCClient implements CommandListener, Runnable {
                 try {
                     socket = (SocketConnection) Connector.open(
                             "socket://" + server + ":" + port +
-                                    (forceWifi ? ";interface=wifi" : ""));
+                                    (forceWifi ? ";interface=wifi;deviceside=true" : ""));
                     in = socket.openInputStream();
                     out = socket.openOutputStream();
 
