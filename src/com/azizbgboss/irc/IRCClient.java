@@ -1165,6 +1165,7 @@ public class IRCClient implements CommandListener, Runnable {
                     timestamps.removeAllElements();
                 }
                 if (chatCanvas != null) {
+                    chatCanvas.invalidateCache();
                     chatCanvas.resetScroll();
                     chatCanvas.repaint();
                 }
@@ -1429,25 +1430,41 @@ public class IRCClient implements CommandListener, Runnable {
 
         protected void keyPressed(int keyCode) {
             int action = getGameAction(keyCode);
-            if (action == UP) { scrollOffset++; repaint(); }
-            else if (action == DOWN) { if (scrollOffset > 0) scrollOffset--; repaint(); }
+            if (action == UP) {
+                scrollOffset++;
+                repaint();
+            } else if (action == DOWN) {
+                if (scrollOffset > 0)
+                    scrollOffset--;
+                repaint();
+            }
         }
 
         protected void keyRepeated(int keyCode) {
             int action = getGameAction(keyCode);
-            if (action == UP) { scrollOffset += 3; repaint(); }
-            else if (action == DOWN) { scrollOffset = scrollOffset > 3 ? scrollOffset - 3 : 0; repaint(); }
+            if (action == UP) {
+                scrollOffset += 3;
+                repaint();
+            } else if (action == DOWN) {
+                scrollOffset = scrollOffset > 3 ? scrollOffset - 3 : 0;
+                repaint();
+            }
         }
 
         public void resetScroll() {
             scrollOffset = 0;
+        }
+
+        public void invalidateCache() {
             cachedMsgCount = -1;
             wrappedCache = null;
         }
 
-        public void setTitle(String t) { this.title = t; }
+        public void setTitle(String t) {
+            this.title = t;
+        }
 
-        // --- Line count cache (for scroll math) ---
+        // --- Full cache rebuild ---
 
         private void rebuildCache(Font fontSmall, Font fontBold, int W) {
             int msgCount = chatMessages.size();
@@ -1455,42 +1472,97 @@ public class IRCClient implements CommandListener, Runnable {
             wrappedCache = new String[msgCount][];
             synchronized (IRCClient.this) {
                 for (int i = 0; i < msgCount; i++) {
-                    String[] msg = (String[]) chatMessages.elementAt(i);
-                    String text = msg[1];
-                    int type = Integer.parseInt(msg[2]);
-                    boolean grouped = isGrouped(i);
-                    if (type == MSG_SYSTEM) {
-                        int tsW = fontSmall.stringWidth("00:00 ");
-                        String[] w = wrapText(text, fontSmall, W - tsW - 2);
-                        wrappedCache[i] = w;
-                        cachedMsgLines[i] = w.length;
-                    } else if (grouped) {
-                        String[] w = wrapText(text, fontSmall, W - 2);
-                        wrappedCache[i] = w;
-                        cachedMsgLines[i] = w.length;
-                    } else {
-                        String nickPrefix = msg[0] + ": ";
-                        int nickW = fontBold.stringWidth(nickPrefix);
-                        int tsW2 = fontSmall.stringWidth("00:00 ");
-                        int firstLineW = W - tsW2 - nickW - 2;
-                        if (firstLineW < 20) firstLineW = 20;
-                        String[] first = wrapText(text, fontSmall, firstLineW);
-                        String remainder = text.length() > first[0].length()
-                            ? text.substring(first[0].length()).trim() : "";
-                        String[] cont = remainder.length() > 0
-                            ? wrapText(remainder, fontSmall, W - 2) : new String[0];
-                        // store: [0]=firstLine, [1..]=continuation
-                        String[] combined = new String[1 + cont.length];
-                        combined[0] = first[0];
-                        for (int j = 0; j < cont.length; j++) combined[j + 1] = cont[j];
-                        wrappedCache[i] = combined;
-                        cachedMsgLines[i] = combined.length;
-                    }
+                    buildCacheEntry(fontSmall, fontBold, W, i);
                 }
             }
             cachedMsgCount = msgCount;
             cachedWidth = W;
             wrappedCacheWidth = W;
+        }
+
+        // --- Incremental append ---
+
+        private void appendToCache(Font fontSmall, Font fontBold, int W) {
+            int msgCount = chatMessages.size();
+            int oldCount = cachedMsgLines.length;
+
+            if (oldCount == 0 || wrappedCache == null || W != cachedWidth) {
+                rebuildCache(fontSmall, fontBold, W);
+                return;
+            }
+
+            if (msgCount == oldCount) {
+                // MAX_MESSAGES hit: one removed from front, one added to back — shift left
+                int[] newLines = new int[oldCount];
+                String[][] newWrapped = new String[oldCount][];
+                System.arraycopy(cachedMsgLines, 1, newLines, 0, oldCount - 1);
+                for (int i = 0; i < oldCount - 1; i++)
+                    newWrapped[i] = wrappedCache[i + 1];
+                cachedMsgLines = newLines;
+                wrappedCache = newWrapped;
+                synchronized (IRCClient.this) {
+                    buildCacheEntry(fontSmall, fontBold, W, oldCount - 1);
+                }
+            } else if (msgCount == oldCount + 1) {
+                // normal: grow by 1
+                int[] newLines = new int[msgCount];
+                String[][] newWrapped = new String[msgCount][];
+                System.arraycopy(cachedMsgLines, 0, newLines, 0, oldCount);
+                for (int i = 0; i < oldCount; i++)
+                    newWrapped[i] = wrappedCache[i];
+                cachedMsgLines = newLines;
+                wrappedCache = newWrapped;
+                synchronized (IRCClient.this) {
+                    buildCacheEntry(fontSmall, fontBold, W, oldCount);
+                }
+            } else {
+                rebuildCache(fontSmall, fontBold, W);
+                return;
+            }
+
+            cachedMsgCount = msgCount;
+            cachedWidth = W;
+            wrappedCacheWidth = W;
+        }
+
+        // --- Build one cache entry ---
+
+        private void buildCacheEntry(Font fontSmall, Font fontBold, int W, int i) {
+            String[] msg = (String[]) chatMessages.elementAt(i);
+            String text = msg[1];
+            int type = Integer.parseInt(msg[2]);
+            boolean grouped = isGrouped(i);
+
+            if (type == MSG_SYSTEM) {
+                int tsW = fontSmall.stringWidth("00:00 ");
+                String[] w = wrapText(text, fontSmall, W - tsW - 2);
+                wrappedCache[i] = w;
+                cachedMsgLines[i] = w.length;
+            } else if (grouped) {
+                String[] w = wrapText(text, fontSmall, W - 2);
+                wrappedCache[i] = w;
+                cachedMsgLines[i] = w.length;
+            } else {
+                String nickPrefix = msg[0] + ": ";
+                int nickW = fontBold.stringWidth(nickPrefix);
+                int tsW2 = fontSmall.stringWidth("00:00 ");
+                int firstLineW = W - tsW2 - nickW - 2;
+                if (firstLineW < 20)
+                    firstLineW = 20;
+                String[] first = wrapText(text, fontSmall, firstLineW);
+                String remainder = text.length() > first[0].length()
+                        ? text.substring(first[0].length()).trim()
+                        : "";
+                String[] cont = remainder.length() > 0
+                        ? wrapText(remainder, fontSmall, W - 2)
+                        : new String[0];
+                String[] combined = new String[1 + cont.length];
+                combined[0] = first[0];
+                for (int j = 0; j < cont.length; j++)
+                    combined[j + 1] = cont[j];
+                wrappedCache[i] = combined;
+                cachedMsgLines[i] = combined.length;
+            }
         }
 
         // --- Text wrap ---
@@ -1503,15 +1575,19 @@ public class IRCClient implements CommandListener, Runnable {
                     break;
                 }
                 int cut = text.length() - 1;
-                while (cut > 0 && font.stringWidth(text.substring(0, cut)) > maxWidth) cut--;
+                while (cut > 0 && font.stringWidth(text.substring(0, cut)) > maxWidth)
+                    cut--;
                 int space = text.lastIndexOf(' ', cut);
-                if (space > 0) cut = space;
+                if (space > 0)
+                    cut = space;
                 lines.addElement(text.substring(0, cut));
                 text = text.substring(cut).trim();
             }
-            if (lines.isEmpty()) lines.addElement("");
+            if (lines.isEmpty())
+                lines.addElement("");
             String[] result = new String[lines.size()];
-            for (int i = 0; i < lines.size(); i++) result[i] = (String) lines.elementAt(i);
+            for (int i = 0; i < lines.size(); i++)
+                result[i] = (String) lines.elementAt(i);
             return result;
         }
 
@@ -1521,15 +1597,18 @@ public class IRCClient implements CommandListener, Runnable {
             int i = 0;
             int xPos = x;
             while (i <= text.length()) {
-                // find word
                 int wordStart = i;
-                while (i < text.length() && text.charAt(i) != ' ') i++;
-                if (i == wordStart) { i++; continue; }
+                while (i < text.length() && text.charAt(i) != ' ')
+                    i++;
+                if (i == wordStart) {
+                    i++;
+                    continue;
+                }
                 String word = text.substring(wordStart, i);
                 boolean addSpace = i < text.length();
-                if (addSpace) i++; // skip space
+                if (addSpace)
+                    i++;
 
-                // strip trailing punctuation for nick matching
                 String stripped = word;
                 if (stripped.length() > 0) {
                     char last = stripped.charAt(stripped.length() - 1);
@@ -1542,7 +1621,7 @@ public class IRCClient implements CommandListener, Runnable {
 
                 if (isMyNick) {
                     g.setFont(fontBold);
-                    g.setColor(0xFFD700); // gold for your own nick
+                    g.setColor(0xFFD700);
                     g.drawString(word, xPos, y, Graphics.TOP | Graphics.LEFT);
                     xPos += fontBold.stringWidth(word);
                 } else if (isOtherNick) {
@@ -1568,26 +1647,33 @@ public class IRCClient implements CommandListener, Runnable {
         // --- Grouping ---
 
         private boolean isGrouped(int i) {
-            if (i == 0) return false;
-            String[] cur  = (String[]) chatMessages.elementAt(i);
+            if (i == 0)
+                return false;
+            String[] cur = (String[]) chatMessages.elementAt(i);
             String[] prev = (String[]) chatMessages.elementAt(i - 1);
-            int curType  = Integer.parseInt(cur[2]);
+            int curType = Integer.parseInt(cur[2]);
             int prevType = Integer.parseInt(prev[2]);
-            if (curType  == MSG_SYSTEM) return false;
-            if (prevType == MSG_SYSTEM) return false;
-            if (!cur[0].equals(prev[0])) return false;
-            String tsCur  = (String) chatTimestamps.elementAt(i);
+            if (curType == MSG_SYSTEM)
+                return false;
+            if (prevType == MSG_SYSTEM)
+                return false;
+            if (!cur[0].equals(prev[0]))
+                return false;
+            String tsCur = (String) chatTimestamps.elementAt(i);
             String tsPrev = (String) chatTimestamps.elementAt(i - 1);
             int diff = tsToMinutes(tsCur) - tsToMinutes(tsPrev);
-            if (diff < 0) diff += 1440;
+            if (diff < 0)
+                diff += 1440;
             return diff <= 10;
         }
 
         private int tsToMinutes(String ts) {
             try {
                 return Integer.parseInt(ts.substring(0, 2)) * 60
-                     + Integer.parseInt(ts.substring(3, 5));
-            } catch (Exception e) { return 0; }
+                        + Integer.parseInt(ts.substring(3, 5));
+            } catch (Exception e) {
+                return 0;
+            }
         }
 
         // --- Paint ---
@@ -1624,13 +1710,13 @@ public class IRCClient implements CommandListener, Runnable {
             g.fillRect(0, 0, W, H);
 
             Font fontSmall = Font.getFont(Font.FACE_MONOSPACE, Font.STYLE_PLAIN, Font.SIZE_SMALL);
-            Font fontBold  = Font.getFont(Font.FACE_MONOSPACE, Font.STYLE_BOLD,  Font.SIZE_SMALL);
+            Font fontBold = Font.getFont(Font.FACE_MONOSPACE, Font.STYLE_BOLD, Font.SIZE_SMALL);
             int lineH = fontSmall.getHeight() + 2;
 
             // Title bar
             long now = System.currentTimeMillis();
-            int hours   = (int) ((now / 3600000) % 24);
-            int minutes = (int) ((now / 60000)   % 60);
+            int hours = (int) ((now / 3600000) % 24);
+            int minutes = (int) ((now / 60000) % 60);
 
             int titleH = fontBold.getHeight() + 6;
             g.setColor(0x1A1A2E);
@@ -1651,31 +1737,40 @@ public class IRCClient implements CommandListener, Runnable {
             g.setColor(COLOR_SYSTEM);
             g.setFont(fontSmall);
             g.drawString(notificationMsg != null ? notificationMsg : (pad(hours) + ":" + pad(minutes)),
-                W / 2, hintY + 2, Graphics.TOP | Graphics.HCENTER);
+                    W / 2, hintY + 2, Graphics.TOP | Graphics.HCENTER);
 
-            int chatTop  = titleH + 2;
-            int chatBot  = hintY - 2;
+            int chatTop = titleH + 2;
+            int chatBot = hintY - 2;
             int maxLines = (chatBot - chatTop) / lineH;
 
             int msgCount = chatMessages.size();
-            if (msgCount == 0) return;
+            if (msgCount == 0)
+                return;
 
-            // Rebuild cache if needed
-            if (msgCount != cachedMsgCount || W != cachedWidth || wrappedCache == null) {
+            // Update cache
+            if (wrappedCache == null || W != cachedWidth) {
                 rebuildCache(fontSmall, fontBold, W);
+            } else if (msgCount != cachedMsgCount) {
+                appendToCache(fontSmall, fontBold, W);
             }
+
             int[] msgLines = cachedMsgLines;
 
             int totalLines = 0;
-            for (int i = 0; i < msgCount; i++) totalLines += msgLines[i];
+            for (int i = 0; i < msgCount; i++)
+                totalLines += msgLines[i];
 
             int maxScroll = totalLines - maxLines;
-            if (maxScroll < 0) maxScroll = 0;
-            if (scrollOffset > maxScroll) scrollOffset = maxScroll;
-            if (scrollOffset < 0) scrollOffset = 0;
+            if (maxScroll < 0)
+                maxScroll = 0;
+            if (scrollOffset > maxScroll)
+                scrollOffset = maxScroll;
+            if (scrollOffset < 0)
+                scrollOffset = 0;
 
             int skipLines = totalLines - maxLines - scrollOffset;
-            if (skipLines < 0) skipLines = 0;
+            if (skipLines < 0)
+                skipLines = 0;
 
             int start = 0, skipped = 0;
             while (start < msgCount && skipped + msgLines[start] <= skipLines) {
@@ -1689,12 +1784,12 @@ public class IRCClient implements CommandListener, Runnable {
 
             synchronized (IRCClient.this) {
                 for (int i = start; i < msgCount; i++) {
-                    String[] msg    = (String[]) chatMessages.elementAt(i);
-                    String   ts     = (String)   chatTimestamps.elementAt(i);
-                    String   msgNick = msg[0];
-                    int      type   = Integer.parseInt(msg[2]);
-                    boolean  grouped = isGrouped(i);
-                    int      tsW    = fontSmall.stringWidth(ts + " ");
+                    String[] msg = (String[]) chatMessages.elementAt(i);
+                    String ts = (String) chatTimestamps.elementAt(i);
+                    String msgNick = msg[0];
+                    int type = Integer.parseInt(msg[2]);
+                    boolean grouped = isGrouped(i);
+                    int tsW = fontSmall.stringWidth(ts + " ");
                     String[] cached = wrappedCache[i];
 
                     if (type == MSG_SYSTEM) {
@@ -1716,25 +1811,23 @@ public class IRCClient implements CommandListener, Runnable {
                         String nickPrefix = msgNick + ": ";
                         int nickW = fontBold.stringWidth(nickPrefix);
 
-                        // timestamp + nick on first line
                         g.setFont(fontSmall);
                         g.setColor(COLOR_TIMESTAMP);
                         g.drawString(ts + " ", 2, y, Graphics.TOP | Graphics.LEFT);
                         g.setFont(fontBold);
                         g.setColor(nickColor);
                         g.drawString(nickPrefix, tsW, y, Graphics.TOP | Graphics.LEFT);
-                        // first line text with highlighting
                         drawHighlighted(g, cached[0], fontSmall, fontBold, tsW + nickW, y);
                         y += lineH;
 
-                        // continuation lines
                         for (int w = 1; w < cached.length; w++) {
                             drawHighlighted(g, cached[w], fontSmall, fontBold, 2, y);
                             y += lineH;
                         }
                     }
 
-                    if (y >= chatBot) break;
+                    if (y >= chatBot)
+                        break;
                 }
             }
 
