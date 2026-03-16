@@ -727,6 +727,15 @@ public class IRCClient implements CommandListener, Runnable {
         return false;
     }
 
+    public boolean containsLower(Vector v, String s) {
+        s = s.toLowerCase();
+        for (int i = 0; i < v.size(); i++) {
+            if (((String) v.elementAt(i)).toLowerCase().equals(s))
+                return true;
+        }
+        return false;
+    }
+
     public int indexOf(Vector v, String s) {
         for (int i = 0; i < v.size(); i++) {
             if (((String) v.elementAt(i)).equals(s))
@@ -1435,6 +1444,7 @@ public class IRCClient implements CommandListener, Runnable {
         private String activeTabInCanvas = null;
         private String[][] wrappedCache = null;
         private int wrappedCacheWidth = 0;
+        private int[][][][] highlightCache = null; // [msgIdx][spanIdx][start,end,color]
 
         private Vector chatMessages = new Vector();
         private Vector chatTimestamps = new Vector();
@@ -1469,6 +1479,7 @@ public class IRCClient implements CommandListener, Runnable {
         public void invalidateCache() {
             cachedMsgCount = -1;
             wrappedCache = null;
+            highlightCache = null;
         }
 
         public void setTitle(String t) {
@@ -1481,6 +1492,7 @@ public class IRCClient implements CommandListener, Runnable {
             int msgCount = chatMessages.size();
             cachedMsgLines = new int[msgCount];
             wrappedCache = new String[msgCount][];
+            highlightCache = new int[msgCount][][][];
             synchronized (IRCClient.this) {
                 for (int i = 0; i < msgCount; i++) {
                     buildCacheEntry(fontSmall, fontBold, W, i);
@@ -1489,6 +1501,61 @@ public class IRCClient implements CommandListener, Runnable {
             cachedMsgCount = msgCount;
             cachedWidth = W;
             wrappedCacheWidth = W;
+        }
+
+        // --- Compute highlight spans for one line ---
+        private int[][] computeSpans(String line) {
+            Vector spans = new Vector();
+            String lineLower = line.toLowerCase();
+
+            // check own nick first
+            String myNickLower = nick.toLowerCase();
+            int pos = 0;
+            while ((pos = lineLower.indexOf(myNickLower, pos)) != -1) {
+                int[] span = new int[] { pos, pos + myNickLower.length(), 0xCC0000 };
+                spans.addElement(span);
+                pos += myNickLower.length();
+            }
+
+            // check other nicks
+            if (nicks != null) {
+                for (int n = 0; n < nicks.size(); n++) {
+                    String nickStr = (String) nicks.elementAt(n);
+                    // strip prefix
+                    if (nickStr.length() > 0) {
+                        char first = nickStr.charAt(0);
+                        if (first == '@' || first == '+' || first == '%' || first == '~' || first == '&')
+                            nickStr = nickStr.substring(1);
+                    }
+                    if (nickStr.length() == 0)
+                        continue;
+                    if (nickStr.equalsIgnoreCase(nick))
+                        continue; // already handled above
+                    String nickLower = nickStr.toLowerCase();
+                    int nickColor = Math.abs(nickStr.hashCode()) % 0x999999 + 0x000066;
+                    pos = 0;
+                    while ((pos = lineLower.indexOf(nickLower, pos)) != -1) {
+                        int[] span = new int[] { pos, pos + nickLower.length(), nickColor };
+                        spans.addElement(span);
+                        pos += nickLower.length();
+                    }
+                }
+            }
+
+            // sort spans by start position (insertion sort, small array)
+            int[][] result = new int[spans.size()][];
+            for (int i = 0; i < spans.size(); i++)
+                result[i] = (int[]) spans.elementAt(i);
+            for (int i = 1; i < result.length; i++) {
+                int[] key = result[i];
+                int j = i - 1;
+                while (j >= 0 && result[j][0] > key[0]) {
+                    result[j + 1] = result[j];
+                    j--;
+                }
+                result[j + 1] = key;
+            }
+            return result;
         }
 
         // --- Incremental append ---
@@ -1505,24 +1572,31 @@ public class IRCClient implements CommandListener, Runnable {
                 }
 
                 if (msgCount == oldCount) {
-                    // MAX_MESSAGES hit: shift left
                     int[] newLines = new int[oldCount];
                     String[][] newWrapped = new String[oldCount][];
+                    int[][][][] newHighlight = new int[oldCount][][][];
                     System.arraycopy(cachedMsgLines, 1, newLines, 0, oldCount - 1);
                     for (int i = 0; i < oldCount - 1; i++)
                         newWrapped[i] = wrappedCache[i + 1];
+                    for (int i = 0; i < oldCount - 1; i++)
+                        newHighlight[i] = highlightCache[i + 1];
                     cachedMsgLines = newLines;
                     wrappedCache = newWrapped;
+                    highlightCache = newHighlight; // assign AFTER copy, BEFORE buildCacheEntry
                     buildCacheEntry(fontSmall, fontBold, W, 0);
                     buildCacheEntry(fontSmall, fontBold, W, oldCount - 1);
                 } else if (msgCount == oldCount + 1) {
                     int[] newLines = new int[msgCount];
                     String[][] newWrapped = new String[msgCount][];
+                    int[][][][] newHighlight = new int[msgCount][][][];
                     System.arraycopy(cachedMsgLines, 0, newLines, 0, oldCount);
                     for (int i = 0; i < oldCount; i++)
                         newWrapped[i] = wrappedCache[i];
+                    for (int i = 0; i < oldCount; i++)
+                        newHighlight[i] = highlightCache[i];
                     cachedMsgLines = newLines;
                     wrappedCache = newWrapped;
+                    highlightCache = newHighlight; // assign AFTER copy, BEFORE buildCacheEntry
                     buildCacheEntry(fontSmall, fontBold, W, oldCount);
                 } else {
                     rebuildCache(fontSmall, fontBold, W);
@@ -1548,10 +1622,16 @@ public class IRCClient implements CommandListener, Runnable {
                 String[] w = wrapText(text, fontSmall, W - tsW - 2);
                 wrappedCache[i] = w;
                 cachedMsgLines[i] = w.length;
+                highlightCache[i] = new int[0][][];
             } else if (grouped) {
                 String[] w = wrapText(text, fontSmall, W - 2);
                 wrappedCache[i] = w;
-                cachedMsgLines[i] = w.length;
+                cachedMsgLines[i] = w.length;// compute highlight spans for each line
+                String[] lines = wrappedCache[i];
+                highlightCache[i] = new int[lines.length][][];
+                for (int l = 0; l < lines.length; l++) {
+                    highlightCache[i][l] = computeSpans(lines[l]);
+                }
             } else {
                 String nickPrefix = msg[0] + ": ";
                 int nickW = fontBold.stringWidth(nickPrefix);
@@ -1571,7 +1651,12 @@ public class IRCClient implements CommandListener, Runnable {
                 for (int j = 0; j < cont.length; j++)
                     combined[j + 1] = cont[j];
                 wrappedCache[i] = combined;
-                cachedMsgLines[i] = combined.length;
+                cachedMsgLines[i] = combined.length;// compute highlight spans for each line
+                String[] lines = wrappedCache[i];
+                highlightCache[i] = new int[lines.length][][];
+                for (int l = 0; l < lines.length; l++) {
+                    highlightCache[i][l] = computeSpans(lines[l]);
+                }
             }
         }
 
@@ -1603,60 +1688,43 @@ public class IRCClient implements CommandListener, Runnable {
 
         // --- Nick highlighting ---
 
-        private void drawHighlighted(Graphics g, String text, Font fontSmall, Font fontBold, int x, int y) {
-            int i = 0;
+        private void drawSpanned(Graphics g, String text, Font fontSmall, Font fontBold, int x, int y, int[][] spans) {
+            if (spans == null || spans.length == 0) {
+                g.setFont(fontSmall);
+                g.setColor(COLOR_TEXT);
+                g.drawString(text, x, y, Graphics.TOP | Graphics.LEFT);
+                return;
+            }
             int xPos = x;
-            while (i <= text.length()) {
-                int wordStart = i;
-                while (i < text.length() && text.charAt(i) != ' ')
-                    i++;
-                if (i == wordStart) {
-                    i++;
-                    continue;
-                }
-                String word = text.substring(wordStart, i);
-                boolean addSpace = i < text.length();
-                if (addSpace)
-                    i++;
-
-                String stripped = word;
-                if (stripped.length() > 0) {
-                    char last = stripped.charAt(stripped.length() - 1);
-                    if (last == ',' || last == ':' || last == '!' || last == '?')
-                        stripped = stripped.substring(0, stripped.length() - 1);
-                    char first = stripped.length() > 0 ? stripped.charAt(0) : ' ';
-                    if (first == '@' || first == '+' || first == '%' || first == '~' || first == '&')
-                        stripped = stripped.substring(1);
-                }
-
-                boolean isMyNick = stripped.equals(nick);
-                boolean isOtherNick = !isMyNick && nicks != null && contains(nicks, stripped);
-
-                if (isMyNick) {
-                    g.setFont(fontBold);
-                    g.setColor(0xCC0000);
-                    g.drawString(word, xPos, y, Graphics.TOP | Graphics.LEFT);
-                    xPos += fontBold.stringWidth(word);
-                } else if (isOtherNick) {
-                    g.setFont(fontBold);
-                    g.setColor(Math.abs(stripped.hashCode()) % 0x999999 + 0x000066);
-                    g.drawString(word, xPos, y, Graphics.TOP | Graphics.LEFT);
-                    xPos += fontBold.stringWidth(word);
-                } else {
+            int cursor = 0;
+            for (int s = 0; s < spans.length; s++) {
+                int start = spans[s][0];
+                int end = spans[s][1];
+                int color = spans[s][2];
+                if (start > cursor) {
+                    // normal text before span
+                    String seg = text.substring(cursor, start);
                     g.setFont(fontSmall);
                     g.setColor(COLOR_TEXT);
-                    g.drawString(word, xPos, y, Graphics.TOP | Graphics.LEFT);
-                    xPos += fontSmall.stringWidth(word);
+                    g.drawString(seg, xPos, y, Graphics.TOP | Graphics.LEFT);
+                    xPos += fontSmall.stringWidth(seg);
                 }
-                if (addSpace) {
-                    g.setFont(fontSmall);
-                    g.setColor(COLOR_TEXT);
-                    g.drawString(" ", xPos, y, Graphics.TOP | Graphics.LEFT);
-                    xPos += fontSmall.stringWidth(" ");
-                }
+                // highlighted span
+                String seg = text.substring(start, end);
+                g.setFont(fontBold);
+                g.setColor(color);
+                g.drawString(seg, xPos, y, Graphics.TOP | Graphics.LEFT);
+                xPos += fontBold.stringWidth(seg);
+                cursor = end;
+            }
+            // remaining text after last span
+            if (cursor < text.length()) {
+                String seg = text.substring(cursor);
+                g.setFont(fontSmall);
+                g.setColor(COLOR_TEXT);
+                g.drawString(seg, xPos, y, Graphics.TOP | Graphics.LEFT);
             }
         }
-
         // --- Grouping ---
 
         private boolean isGrouped(int i) {
@@ -1697,6 +1765,7 @@ public class IRCClient implements CommandListener, Runnable {
                 activeTabInCanvas = activeTab;
                 cachedMsgCount = -1;
                 wrappedCache = null;
+                highlightCache = null;
                 if (isChannelTab()) {
                     synchronized (IRCClient.this) {
                         chatMessages = messages;
@@ -1816,7 +1885,7 @@ public class IRCClient implements CommandListener, Runnable {
                         }
                     } else if (grouped) {
                         for (int w = 0; w < cached.length; w++) {
-                            drawHighlighted(g, cached[w], fontSmall, fontBold, 2, y);
+                            drawSpanned(g, cached[w], fontSmall, fontBold, 2, y, highlightCache[i][w]);
                             y += lineH;
                         }
                     } else {
@@ -1830,11 +1899,11 @@ public class IRCClient implements CommandListener, Runnable {
                         g.setFont(fontBold);
                         g.setColor(nickColor);
                         g.drawString(nickPrefix, tsW, y, Graphics.TOP | Graphics.LEFT);
-                        drawHighlighted(g, cached[0], fontSmall, fontBold, tsW + nickW, y);
+                        drawSpanned(g, cached[0], fontSmall, fontBold, tsW + nickW, y, highlightCache[i][0]);
                         y += lineH;
 
                         for (int w = 1; w < cached.length; w++) {
-                            drawHighlighted(g, cached[w], fontSmall, fontBold, 2, y);
+                            drawSpanned(g, cached[w], fontSmall, fontBold, 2, y, highlightCache[i][w]);
                             y += lineH;
                         }
                     }
