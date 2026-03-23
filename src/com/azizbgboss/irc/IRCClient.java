@@ -682,6 +682,7 @@ public class IRCClient implements CommandListener, Runnable {
 
                 } catch (Exception re) {
                     addMessage("", "* Reconnect failed: " + re.getMessage(), MSG_SYSTEM);
+                    notification(500, "Reconnect failed!");
                     running = false;
                     connected = false;
                     break;
