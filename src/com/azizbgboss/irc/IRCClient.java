@@ -90,6 +90,8 @@ public class IRCClient implements CommandListener, Runnable {
 
     private Vector nicks = null;
 
+    private boolean showUnsupported = false;
+
     // --- UI: MIDlet ---
     private IRCMidlet midlet;
 
@@ -129,6 +131,7 @@ public class IRCClient implements CommandListener, Runnable {
     private TextBox inputBox;
     private TextBox msgTargetBox;
     private TextBox nickBox;
+
     private Command cmdSend;
     private Command cmdLeave;
     private Command cmdClear;
@@ -136,6 +139,8 @@ public class IRCClient implements CommandListener, Runnable {
     private Command cmdUsers;
     private Command cmdNick;
     private Command cmdNewMessage;
+    private Command cmdShowUnsupported;
+
     private Command cmdInputOk;
     private Command cmdInputCancel;
     private Command cmdMsgTargetOk;
@@ -802,6 +807,12 @@ public class IRCClient implements CommandListener, Runnable {
                             for (int i = 0; i < privateTabs.size() - 1; i++) {
                                 if (!privateTabs.elementAt(i).equals(senderNick)) {
                                     privateTabs.removeElementAt(i);
+                                    for (int j = i; j < MAX_PRIVATE_TABS - 1; j++) {
+                                        privateMessages[j] = privateMessages[j + 1];
+                                        privateTimestamps[j] = privateTimestamps[j + 1];
+                                    }
+                                    privateMessages[MAX_PRIVATE_TABS - 1] = null;
+                                    privateTimestamps[MAX_PRIVATE_TABS - 1] = null;
                                     break;
                                 }
                             }
@@ -863,6 +874,15 @@ public class IRCClient implements CommandListener, Runnable {
                 }
                 addMessage("", "* " + senderNick + " is now " + newNick, MSG_SYSTEM);
             }
+        } else if (command.equals("ERROR")) {
+            String errMsg = params.startsWith(":") ? params.substring(1) : params;
+            addMessage("", "* ERROR: " + errMsg, MSG_SYSTEM);
+        } else if (command.equals("NOTICE")) {
+            int spaceColon = params.indexOf(" :");
+            if (spaceColon != -1) {
+                String message = params.substring(spaceColon + 2);
+                addMessage("", "* " + senderNick + ": " + message, MSG_SYSTEM);
+            }
         } else if (command.equals("353")) {
             int colon = params.lastIndexOf(':');
             if (colon != -1) {
@@ -922,6 +942,9 @@ public class IRCClient implements CommandListener, Runnable {
                     pendingChannel = null;
                 }
             }
+        } else {
+            if (showUnsupported)
+                addMessage("", "* " + command + " " + params, MSG_SYSTEM);
         }
     }
 
@@ -1065,6 +1088,7 @@ public class IRCClient implements CommandListener, Runnable {
         cmdUsers = new Command("Users", Command.SCREEN, 5);
         cmdNewMessage = new Command("New Message", Command.SCREEN, 6);
         cmdNick = new Command("Change Nick", Command.SCREEN, 7);
+        cmdShowUnsupported = new Command(showUnsupported ? "Hide Unsupported Lines" : "Show Unsupported Lines", Command.OK, 8);
         chatCanvas.addCommand(cmdSend);
         chatCanvas.addCommand(cmdLeave);
         chatCanvas.addCommand(cmdClear);
@@ -1072,6 +1096,7 @@ public class IRCClient implements CommandListener, Runnable {
         chatCanvas.addCommand(cmdUsers);
         chatCanvas.addCommand(cmdNewMessage);
         chatCanvas.addCommand(cmdNick);
+        chatCanvas.addCommand(cmdShowUnsupported);
         chatCanvas.setCommandListener(this);
     }
 
@@ -1237,6 +1262,12 @@ public class IRCClient implements CommandListener, Runnable {
                     nickBox.setCommandListener(this);
                     midlet.getDisplay().setCurrent(nickBox);
                 }
+            } else if (c == cmdShowUnsupported) {
+                showUnsupported = !showUnsupported;
+                chatCanvas.removeCommand(cmdShowUnsupported);
+                cmdShowUnsupported = new Command(showUnsupported ? "Hide Unsupported Lines" : "Show Unsupported Lines", Command.OK, 8);
+                chatCanvas.addCommand(cmdShowUnsupported);
+                notification(100, showUnsupported ? "Showing Unsupported Lines" : "Hiding Unsupported Lines");
             }
         }
 
@@ -1279,6 +1310,12 @@ public class IRCClient implements CommandListener, Runnable {
                                 for (int i = 0; i < privateTabs.size() - 1; i++) {
                                     if (!privateTabs.elementAt(i).equals(target)) {
                                         privateTabs.removeElementAt(i);
+                                        for (int j = i; j < MAX_PRIVATE_TABS - 1; j++) {
+                                            privateMessages[j] = privateMessages[j + 1];
+                                            privateTimestamps[j] = privateTimestamps[j + 1];
+                                        }
+                                        privateMessages[MAX_PRIVATE_TABS - 1] = null;
+                                        privateTimestamps[MAX_PRIVATE_TABS - 1] = null;
                                         break;
                                     }
                                 }
@@ -1390,6 +1427,12 @@ public class IRCClient implements CommandListener, Runnable {
                             for (int i = 0; i < privateTabs.size() - 1; i++) {
                                 if (!privateTabs.elementAt(i).equals(senderNick)) {
                                     privateTabs.removeElementAt(i);
+                                    for (int j = i; j < MAX_PRIVATE_TABS - 1; j++) {
+                                        privateMessages[j] = privateMessages[j + 1];
+                                        privateTimestamps[j] = privateTimestamps[j + 1];
+                                    }
+                                    privateMessages[MAX_PRIVATE_TABS - 1] = null;
+                                    privateTimestamps[MAX_PRIVATE_TABS - 1] = null;
                                     break;
                                 }
                             }
