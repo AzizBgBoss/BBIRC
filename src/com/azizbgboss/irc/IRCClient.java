@@ -49,8 +49,8 @@ public class IRCClient implements CommandListener, Runnable {
     // --- Messages ---
 
     private Vector messages = new Vector();
-
     private Vector timestamps = new Vector();
+
     private StringBuffer namesBuffer = new StringBuffer();
 
     // Private messages
@@ -142,9 +142,12 @@ public class IRCClient implements CommandListener, Runnable {
     private Command cmdShowUnsupported;
 
     private Command cmdInputOk;
+    private Command cmdInputLastMessage;
     private Command cmdInputCancel;
+
     private Command cmdMsgTargetOk;
     private Command cmdMsgTargetCancel;
+
     private Command cmdNickOk;
     private Command cmdNickCancel;
 
@@ -1089,7 +1092,8 @@ public class IRCClient implements CommandListener, Runnable {
         cmdUsers = new Command("Users", Command.SCREEN, 5);
         cmdNewMessage = new Command("New Message", Command.SCREEN, 6);
         cmdNick = new Command("Change Nick", Command.SCREEN, 7);
-        cmdShowUnsupported = new Command(showUnsupported ? "Hide Unsupported Lines" : "Show Unsupported Lines", Command.OK, 8);
+        cmdShowUnsupported = new Command(showUnsupported ? "Hide Unsupported Lines" : "Show Unsupported Lines",
+                Command.OK, 8);
         chatCanvas.addCommand(cmdSend);
         chatCanvas.addCommand(cmdLeave);
         chatCanvas.addCommand(cmdClear);
@@ -1197,8 +1201,10 @@ public class IRCClient implements CommandListener, Runnable {
                 inputBox = new TextBox("Message", "", 256, TextField.ANY);
                 cmdInputOk = new Command("Send", Command.OK, 1);
                 cmdInputCancel = new Command("Cancel", Command.BACK, 2);
+                cmdInputLastMessage = new Command("Paste Last Message", Command.SCREEN, 3);
                 inputBox.addCommand(cmdInputOk);
                 inputBox.addCommand(cmdInputCancel);
+                inputBox.addCommand(cmdInputLastMessage);
                 inputBox.setCommandListener(this);
                 midlet.getDisplay().setCurrent(inputBox);
             } else if (c == cmdLeave) {
@@ -1266,7 +1272,8 @@ public class IRCClient implements CommandListener, Runnable {
             } else if (c == cmdShowUnsupported) {
                 showUnsupported = !showUnsupported;
                 chatCanvas.removeCommand(cmdShowUnsupported);
-                cmdShowUnsupported = new Command(showUnsupported ? "Hide Unsupported Lines" : "Show Unsupported Lines", Command.OK, 8);
+                cmdShowUnsupported = new Command(showUnsupported ? "Hide Unsupported Lines" : "Show Unsupported Lines",
+                        Command.OK, 8);
                 chatCanvas.addCommand(cmdShowUnsupported);
                 notification(100, showUnsupported ? "Showing Unsupported Lines" : "Hiding Unsupported Lines");
             }
@@ -1356,6 +1363,29 @@ public class IRCClient implements CommandListener, Runnable {
                     }
                 }
                 midlet.getDisplay().setCurrent(chatCanvas);
+            } else if (c == cmdInputLastMessage) {
+                String lastMsg = null;
+                if (activeTab.startsWith("#")) {
+                    for (int i = messages.size() - 1; i >= 0; i--) {
+                        if (((String[]) messages.elementAt(i))[0].equals(nick)) {
+                            lastMsg = ((String[]) messages.elementAt(i))[1];
+                            break;
+                        }
+                    }
+                } else {
+                    int idx = privateTabs.indexOf(activeTab);
+                    for (int i = privateMessages[idx].size() - 1; i >= 0; i--) {
+                        if (((String[]) privateMessages[idx].elementAt(i))[0].equals(nick)) {
+                            lastMsg = ((String[]) privateMessages[idx].elementAt(i))[1];
+                            break;
+                        }
+                    }
+                }
+                if (lastMsg != null) {
+                    inputBox.setString(lastMsg);
+                } else {
+                    showAlert("Error", "You never sent any message!", inputBox);
+                }
             } else {
                 midlet.getDisplay().setCurrent(chatCanvas);
             }
