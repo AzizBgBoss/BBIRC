@@ -1181,8 +1181,16 @@ public class IRCClient implements CommandListener, Runnable {
                 midlet.getDisplay().setCurrent(mainForm);
             } else if (c == cmdClear) {
                 synchronized (IRCClient.this) {
-                    messages.removeAllElements();
-                    timestamps.removeAllElements();
+                    if (activeTab.startsWith("#")) {
+                        messages.removeAllElements();
+                        timestamps.removeAllElements();
+                    } else {
+                        int idx = privateTabs.indexOf(activeTab);
+                        if (idx != -1) { // just to be extra safe
+                            privateMessages[idx].removeAllElements();
+                            privateTimestamps[idx].removeAllElements();
+                        }
+                    }
                 }
                 if (chatCanvas != null) {
                     chatCanvas.invalidateCache();
