@@ -748,7 +748,7 @@ public class IRCClient implements CommandListener, Runnable {
     public boolean containsNick(Vector v, String s) {
         s = s.toLowerCase();
         final String ircPrefixes = "@+%~&"; // all type of prefixes that irc servers give to nicks if per example
-                                         // authenticated
+                                            // authenticated
         for (int i = 0; i < v.size(); i++) { // Check normal nick
             if (((String) v.elementAt(i)).toLowerCase().equals(s))
                 return true;
@@ -1338,6 +1338,8 @@ public class IRCClient implements CommandListener, Runnable {
                 if (target.length() > 0) {
                     if (target.equals(nick)) {
                         showAlert("Error", "Can't message yourself!", msgTargetBox);
+                    } else if (target.startsWith("#")) {
+                        showAlert("Error", "Can't message channels!", msgTargetBox);
                     } else {
                         int tabID = -1;
                         if (contains(privateTabs, target)) {
