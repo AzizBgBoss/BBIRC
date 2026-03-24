@@ -745,6 +745,37 @@ public class IRCClient implements CommandListener, Runnable {
         return false;
     }
 
+    public boolean containsNick(Vector v, String s) {
+        s = s.toLowerCase();
+        final String ircPrefixes = "@+%~&"; // all type of prefixes that irc servers give to nicks if per example
+                                         // authenticated
+        for (int i = 0; i < v.size(); i++) { // Check normal nick
+            if (((String) v.elementAt(i)).toLowerCase().equals(s))
+                return true;
+        }
+        for (int j = 0; j < ircPrefixes.length(); j++) {
+            for (int i = 0; i < v.size(); i++) {
+                if (((String) v.elementAt(i)).toLowerCase().equals(ircPrefixes.charAt(j) + s))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private void removeNick(Vector v, String nick) {
+        final String prefixes = "@+%~&";
+        for (int i = v.size() - 1; i >= 0; i--) {
+            String entry = (String) v.elementAt(i);
+            // strip prefix if present
+            if (entry.length() > 0 && prefixes.indexOf(entry.charAt(0)) != -1)
+                entry = entry.substring(1);
+            if (entry.equals(nick)) {
+                v.removeElementAt(i);
+                return;
+            }
+        }
+    }
+
     public int indexOf(Vector v, String s) {
         for (int i = 0; i < v.size(); i++) {
             if (((String) v.elementAt(i)).equals(s))
@@ -853,19 +884,19 @@ public class IRCClient implements CommandListener, Runnable {
                 addMessage("", "* " + senderNick + " joined", MSG_SYSTEM);
             }
         } else if (command.equals("PART")) {
-            if (nicks != null && nicks.contains(senderNick)) // Too safe than sorry
-                nicks.removeElement(senderNick);
+            if (nicks != null && containsNick(nicks, senderNick)) // Too safe than sorry
+                removeNick(nicks, senderNick);
             addMessage("", "* " + senderNick + " left", MSG_SYSTEM);
         } else if (command.equals("QUIT")) {
-            if (nicks != null && nicks.contains(senderNick)) // Too safe than sorry
-                nicks.removeElement(senderNick);
+            if (nicks != null && containsNick(nicks, senderNick)) // Too safe than sorry
+                removeNick(nicks, senderNick);
             addMessage("", "* " + senderNick + " quit", MSG_SYSTEM);
         } else if (command.equals("NICK")) {
             if (senderNick.equals(nick)) {
                 int c2 = params.indexOf(':');
                 nick = c2 != -1 ? params.substring(c2 + 1) : params;
                 if (nicks != null && nicks.contains(senderNick)) {
-                    nicks.removeElement(senderNick);
+                    removeNick(nicks, senderNick);
                     nicks.addElement(nick);
                 }
                 addMessage("", "* You are now known as " + nick, MSG_SYSTEM);
@@ -873,7 +904,7 @@ public class IRCClient implements CommandListener, Runnable {
                 int c2 = params.indexOf(':');
                 String newNick = c2 != -1 ? params.substring(c2 + 1) : params;
                 if (nicks != null && nicks.contains(senderNick)) {
-                    nicks.removeElement(senderNick);
+                    removeNick(nicks, senderNick);
                     nicks.addElement(newNick);
                 }
                 addMessage("", "* " + senderNick + " is now " + newNick, MSG_SYSTEM);
