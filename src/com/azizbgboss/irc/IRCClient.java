@@ -651,7 +651,7 @@ public class IRCClient implements CommandListener, Runnable {
                 if (!running)
                     break; // intentional disconnect, stop
                 // network error — attempt reconnect
-                addMessage("", "* Connection lost, reconnecting...", MSG_SYSTEM);
+                addSystemMessage("* Connection lost, reconnecting...");
                 closeIO();
                 connected = false;
                 registered = false;
@@ -679,12 +679,12 @@ public class IRCClient implements CommandListener, Runnable {
 
                     sendRaw("NICK " + nick);
                     sendRaw("USER " + nick + " 0 * :" + nick);
-                    addMessage("", "* Reconnected, rejoining...", MSG_SYSTEM);
+                    addSystemMessage("* Reconnected, rejoining...");
                     // 001 handler will call joinChannel when registered
                     pendingChannel = currentChannel;
 
                 } catch (Exception re) {
-                    addMessage("", "* Reconnect failed: " + re.getMessage(), MSG_SYSTEM);
+                    addSystemMessage("* Reconnect failed: " + re.getMessage());
                     notification(500, "Reconnect failed!");
                     running = false;
                     connected = false;
@@ -1033,6 +1033,22 @@ public class IRCClient implements CommandListener, Runnable {
     // Messages
     // =========================================================
 
+    private long msgSeq = 0;
+    private long[] pmSeq = new long[MAX_PRIVATE_TABS];
+
+    private void addSystemMessage(String text) {
+        if (isChannelTab()) {
+            addMessage("", text, MSG_SYSTEM);
+        } else {
+            int tabID = indexOf(privateTabs, activeTab);
+            if (tabID != -1 && privateMessages[tabID] != null) {
+                addPMessage(tabID, "", text, MSG_SYSTEM);
+            } else {
+                addMessage("", text, MSG_SYSTEM);
+            }
+        }
+    }
+
     private synchronized void addMessage(final String msgNick,
             final String text,
             final int type) {
@@ -1045,6 +1061,7 @@ public class IRCClient implements CommandListener, Runnable {
             messages.removeElementAt(0);
             timestamps.removeElementAt(0);
         }
+        msgSeq++;
 
         if (type == MSG_OTHER) {
             if (activeTab != null && activeTab.equals(currentChannel))
@@ -1060,7 +1077,8 @@ public class IRCClient implements CommandListener, Runnable {
             midlet.getDisplay().callSerially(new Runnable() {
                 public void run() {
                     if (chatCanvas != null) {
-                        chatCanvas.resetScroll();
+                        if (chatCanvas.isAtBottom())
+                            chatCanvas.resetScroll();
                         chatCanvas.repaint();
                     }
                 }
@@ -1080,6 +1098,7 @@ public class IRCClient implements CommandListener, Runnable {
             privateMessages[ID].removeElementAt(0);
             privateTimestamps[ID].removeElementAt(0);
         }
+        pmSeq[ID]++;
 
         if (type == MSG_OTHER) {
             if (activeTab != null && activeTab.equals(privateTabs.elementAt(ID)))
@@ -1097,7 +1116,8 @@ public class IRCClient implements CommandListener, Runnable {
             midlet.getDisplay().callSerially(new Runnable() {
                 public void run() {
                     if (chatCanvas != null) {
-                        chatCanvas.resetScroll();
+                        if (chatCanvas.isAtBottom())
+                            chatCanvas.resetScroll();
                         chatCanvas.repaint();
                     }
                 }
@@ -1554,6 +1574,7 @@ public class IRCClient implements CommandListener, Runnable {
         private int[] cachedMsgLines = new int[0];
         private int cachedMsgCount = 0;
         private int cachedWidth = 0;
+        private long lastSeq = -1;
         private String title = "";
         private int scrollOffset = 0;
         private String activeTabInCanvas = null;
@@ -1589,6 +1610,10 @@ public class IRCClient implements CommandListener, Runnable {
 
         public void resetScroll() {
             scrollOffset = 0;
+        }
+
+        public boolean isAtBottom() {
+            return scrollOffset == 0;
         }
 
         public void invalidateCache() {
@@ -1881,6 +1906,7 @@ public class IRCClient implements CommandListener, Runnable {
                 cachedMsgCount = -1;
                 wrappedCache = null;
                 highlightCache = null;
+                lastSeq = -1;
                 if (isChannelTab()) {
                     synchronized (IRCClient.this) {
                         chatMessages = messages;
@@ -1945,11 +1971,24 @@ public class IRCClient implements CommandListener, Runnable {
                 return;
 
             // Update cache
+            int activePmTabID = isChannelTab() ? -1 : indexOf(privateTabs, activeTab);
+            long currentSeq = isChannelTab() ? msgSeq : (activePmTabID != -1 ? pmSeq[activePmTabID] : 0);
+
             if (wrappedCache == null || W != cachedWidth) {
                 rebuildCache(fontSmall, fontBold, W);
             } else if (msgCount != cachedMsgCount) {
-                appendToCache(fontSmall, fontBold, W);
+                // Only safe to do the cheap 1-message shift if exactly one
+                // message actually changed since our last render. If several
+                // messages arrived between repaints (e.g. a burst), fall back
+                // to a full rebuild so cached lines don't end up misaligned
+                // with the wrong message.
+                if (currentSeq - lastSeq == 1) {
+                    appendToCache(fontSmall, fontBold, W);
+                } else {
+                    rebuildCache(fontSmall, fontBold, W);
+                }
             }
+            lastSeq = currentSeq;
 
             int[] msgLines = cachedMsgLines;
 
